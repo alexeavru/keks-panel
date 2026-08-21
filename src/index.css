@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  color: #121a17;
+  background: #f3f6f4;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #a3b5ab;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-ink-900 px-4 py-2.5 text-sm font-semibold text-ink-50 transition hover:bg-ink-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-ink-700 transition hover:bg-ink-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500;
+  }
+
+  .field {
+    @apply w-full rounded-lg border border-ink-200 bg-white/80 px-3.5 py-2.5 font-mono text-sm text-ink-900 placeholder:text-ink-400 outline-none transition focus:border-leaf-500 focus:ring-2 focus:ring-leaf-500/20;
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-[0.08em] text-ink-500;
+  }
+
+  .surface {
+    @apply rounded-2xl border border-ink-200/80 bg-white/70 shadow-panel backdrop-blur-sm;
+  }
+}
