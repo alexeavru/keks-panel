@@ -4,6 +4,7 @@ export type ResourceKind =
   | 'Deployment'
   | 'StatefulSet'
   | 'Service'
+  | 'ConfigMap'
   | 'Node'
 
 export type ConnectionMode = 'demo' | 'kubeconfig' | 'live'
@@ -107,6 +108,13 @@ export interface Service {
   }
 }
 
+export interface ConfigMap {
+  kind: 'ConfigMap'
+  metadata: K8sObjectMeta
+  data: Record<string, string>
+  binaryDataKeys: string[]
+}
+
 export interface Node {
   kind: 'Node'
   metadata: K8sObjectMeta
@@ -121,7 +129,17 @@ export interface Node {
   }
 }
 
-export type K8sResource = Namespace | Pod | Deployment | StatefulSet | Service | Node
+export interface ClusterInfo {
+  name: string
+  context: string
+  server: string
+  user: string
+  namespace?: string
+  version: string
+  platform?: string
+}
+
+export type K8sResource = Namespace | Pod | Deployment | StatefulSet | Service | ConfigMap | Node
 
 export interface ClusterSnapshot {
   namespaces: Namespace[]
@@ -129,5 +147,7 @@ export interface ClusterSnapshot {
   deployments: Deployment[]
   statefulSets: StatefulSet[]
   services: Service[]
+  configMaps: ConfigMap[]
   nodes: Node[]
+  info: ClusterInfo
 }

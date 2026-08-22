@@ -10,14 +10,16 @@ import {
   mapNamespace,
   mapNode,
   mapService,
+  mapConfigMap,
   listMappedPods,
   testContext,
 } from './k8s.js'
+import { handleCallback, logout, me, requireAuth, startLogin } from './auth.js'
 
 const app = express()
 const PORT = Number(process.env.KEKS_API_PORT || 8787)
 
-app.use(cors())
+app.use(cors({ origin: true, credentials: true }))
 app.use(express.json())
 
 function contextFromReq(req: express.Request): string {
@@ -38,6 +40,30 @@ function sendError(res: express.Response, err: unknown, status = 500) {
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, kubeconfig: kubeconfigPath() })
+})
+
+app.get('/api/auth/login', (req, res) => {
+  startLogin(req, res)
+})
+
+app.get('/api/auth/callback', (req, res) => {
+  void handleCallback(req, res)
+})
+
+app.get('/api/auth/me', (req, res) => {
+  me(req, res)
+})
+
+app.post('/api/auth/logout', (req, res) => {
+  logout(req, res)
+})
+
+app.use('/api', (req, res, next) => {
+  if (req.path.startsWith('/auth/') || req.path === '/health') {
+    next()
+    return
+  }
+  requireAuth(req, res, next)
 })
 
 app.get('/api/kubeconfig/contexts', (_req, res) => {
@@ -129,6 +155,20 @@ app.get('/api/services', async (req, res) => {
       ? await core.listNamespacedService({ namespace })
       : await core.listServiceForAllNamespaces()
     res.json((result.items ?? []).map(mapService))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/configmaps', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const namespace = typeof req.query.namespace === 'string' ? req.query.namespace : ''
+    const { core } = getApis(context)
+    const result = namespace
+      ? await core.listNamespacedConfigMap({ namespace })
+      : await core.listConfigMapForAllNamespaces()
+    res.json((result.items ?? []).map(mapConfigMap))
   } catch (err) {
     sendError(res, err)
   }

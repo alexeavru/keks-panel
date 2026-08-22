@@ -9,9 +9,11 @@ import {
   Network,
   Server,
   Database,
+  FileCode,
   Layers,
 } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
+import { useAuth } from '@/context/AuthContext'
 import { listNamespaces } from '@/lib/k8s-client'
 import { shortHost } from '@/lib/format'
 import { NamespaceFilter } from '@/components/NamespaceFilter'
@@ -23,11 +25,13 @@ const nav = [
   { to: '/cluster/deployments', label: 'Deployments', icon: Boxes },
   { to: '/cluster/statefulsets', label: 'StatefulSets', icon: Database },
   { to: '/cluster/services', label: 'Services', icon: Network },
+  { to: '/cluster/configmaps', label: 'ConfigMaps', icon: FileCode },
   { to: '/cluster/nodes', label: 'Nodes', icon: Server },
 ]
 
 export function AppShell() {
   const { connection, disconnect, namespace, setNamespace } = useCluster()
+  const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [namespaces, setNamespaces] = useState<string[]>([])
 
@@ -56,16 +60,21 @@ export function AppShell() {
     navigate('/connect')
   }
 
+  const handleLogout = async () => {
+    disconnect()
+    await logout()
+    navigate('/login')
+  }
+
   return (
-    <div className="min-h-screen bg-wash bg-grid">
-      <div className="mx-auto flex min-h-screen max-w-[1440px]">
-        <aside className="sticky top-0 flex h-screen w-[240px] shrink-0 flex-col border-r border-ink-200/70 bg-white/50 px-4 py-5 backdrop-blur-md">
+    <div className="flex min-h-screen bg-wash bg-grid">
+        <aside className="sticky top-0 flex h-screen w-[240px] shrink-0 flex-col border-r border-ink-200/70 bg-white/80 px-4 py-5 backdrop-blur-md">
           <div className="mb-6 px-2">
             <p className="font-display text-2xl font-extrabold tracking-tight text-ink-900">
               KEKS
             </p>
             <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">
-              panel · 0.2.0
+              panel · 0.3.0
             </p>
           </div>
 
@@ -99,7 +108,12 @@ export function AppShell() {
           </nav>
 
           <div className="mt-4 space-y-3 border-t border-ink-200 pt-4">
-            <div className="rounded-xl border border-ink-200 bg-white/70 px-3 py-3">
+            {user && (
+              <p className="truncate px-1 font-mono text-[11px] text-ink-500" title={user.email || user.name}>
+                {user.email || user.name}
+              </p>
+            )}
+            <div className="rounded border border-ink-200 bg-white/70 px-3 py-3">
               <div className="mb-1 flex items-center gap-1.5 text-ink-500">
                 <Cable className="h-3.5 w-3.5" />
                 <span className="font-mono text-[10px] uppercase tracking-[0.12em]">
@@ -123,13 +137,15 @@ export function AppShell() {
               <LogOut className="h-4 w-4" />
               Отключиться
             </button>
+            <button type="button" className="btn-ghost w-full justify-start" onClick={() => void handleLogout()}>
+              Выйти из Dex
+            </button>
           </div>
         </aside>
 
         <main className="min-w-0 flex-1 px-6 py-8 sm:px-8">
           <Outlet />
         </main>
-      </div>
     </div>
   )
 }

@@ -69,7 +69,7 @@ export function NamespaceFilter({ namespaces, value, onChange }: NamespaceFilter
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-ink-500 transition ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 flex w-[220px] flex-col overflow-hidden rounded-lg border border-ink-200 bg-white shadow-lg">
+        <div className="absolute z-50 mt-1 flex w-[220px] flex-col overflow-hidden rounded border border-ink-200 bg-white shadow-lg">
           <div className="relative shrink-0 border-b border-ink-100 px-2 py-2">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
             <input

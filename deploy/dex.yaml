@@ -1,0 +1,115 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dex
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dex
+  namespace: dex
+data:
+  config.yaml: |
+    issuer: http://127.0.0.1:5556/dex
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:5556
+    telemetry:
+      http: 0.0.0.0:5558
+    logger:
+      level: info
+      format: text
+    oauth2:
+      skipApprovalScreen: true
+    enablePasswordDB: true
+    staticPasswords:
+      - email: admin@keks.local
+        # bcrypt cost 10 of "password" (Dex requires cost >= 10)
+        hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+        username: admin
+        userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
+    staticClients:
+      - id: keks-panel
+        redirectURIs:
+          - http://localhost:5173/auth/callback
+          - http://localhost:5173/api/auth/callback
+          - http://127.0.0.1:5173/auth/callback
+          - http://127.0.0.1:5173/api/auth/callback
+        name: KEKS Panel
+        secret: keks-panel-dev
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  namespace: dex
+  labels:
+    app: dex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dex
+  template:
+    metadata:
+      labels:
+        app: dex
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.41.1
+          args:
+            - dex
+            - serve
+            - /etc/dex/config.yaml
+          ports:
+            - name: http
+              containerPort: 5556
+            - name: telemetry
+              containerPort: 5558
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dex
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /dex/healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /dex/healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: dex
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: dex
+  labels:
+    app: dex
+spec:
+  type: NodePort
+  selector:
+    app: dex
+  ports:
+    - name: http
+      port: 5556
+      targetPort: http
+      nodePort: 32056
+      protocol: TCP

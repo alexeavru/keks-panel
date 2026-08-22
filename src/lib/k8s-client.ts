@@ -8,6 +8,7 @@ import type {
   Node,
   Pod,
   Service,
+  ConfigMap,
   StatefulSet,
 } from '@/types/k8s'
 
@@ -20,12 +21,17 @@ export {
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
     },
   })
   const data = (await res.json().catch(() => ({}))) as T & { error?: string }
+  if (res.status === 401 && !path.startsWith('/api/auth/')) {
+    window.location.assign('/login')
+    throw new Error(data.error || 'Требуется вход через Dex')
+  }
   if (!res.ok) {
     throw new Error(data.error || `HTTP ${res.status}`)
   }
@@ -161,6 +167,21 @@ export async function listServices(
       : snap.services
   }
   return api(withContext('/api/services', connection, namespace), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listConfigMaps(
+  connection: ClusterConnection,
+  namespace?: string,
+): Promise<ConfigMap[]> {
+  if (connection.mode === 'demo') {
+    const snap = await fetchSnapshot(connection)
+    return namespace
+      ? snap.configMaps.filter((c) => c.metadata.namespace === namespace)
+      : snap.configMaps
+  }
+  return api(withContext('/api/configmaps', connection, namespace), {
     headers: contextHeaders(connection),
   })
 }

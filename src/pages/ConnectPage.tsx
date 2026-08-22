@@ -1,12 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { Cable, FileKey2, FlaskConical, RefreshCw, Sparkles } from 'lucide-react'
+import { useAuth } from '@/context/AuthContext'
 import { useCluster } from '@/context/ClusterContext'
 import { fetchKubeContexts } from '@/lib/k8s-client'
 import type { ConnectionMode, KubeContextInfo } from '@/types/k8s'
 
 export function ConnectPage() {
   const { connection, connect, connecting, error } = useCluster()
+  const { user, logout } = useAuth()
   const navigate = useNavigate()
 
   const [mode, setMode] = useState<ConnectionMode>('kubeconfig')
@@ -104,7 +106,7 @@ export function ConnectPage() {
 
         <section className="w-full max-w-md lg:flex-1">
           <form onSubmit={onSubmit} className="surface p-6 sm:p-7">
-            <div className="mb-6 grid grid-cols-2 gap-2 rounded-xl bg-ink-100/70 p-1">
+            <div className="mb-6 grid grid-cols-2 gap-2 rounded bg-ink-100/70 p-1">
               <button
                 type="button"
                 onClick={() => setMode('kubeconfig')}
@@ -184,7 +186,7 @@ export function ConnectPage() {
                   </div>
 
                   {selectedContext && (
-                    <div className="rounded-xl border border-ink-200 bg-ink-50/70 px-4 py-3 font-mono text-xs text-ink-600">
+                    <div className="rounded border border-ink-200 bg-ink-50/70 px-4 py-3 font-mono text-xs text-ink-600">
                       {(() => {
                         const ctx = contexts.find((c) => c.name === selectedContext)
                         if (!ctx) return null
@@ -220,7 +222,7 @@ export function ConnectPage() {
                   )}
                 </>
               ) : (
-                <p className="rounded-xl border border-dashed border-ink-200 bg-ink-50/60 px-4 py-3 text-sm leading-relaxed text-ink-600">
+                <p className="rounded border border-dashed border-ink-200 bg-ink-50/60 px-4 py-3 text-sm leading-relaxed text-ink-600">
                   Demo загружает локальный снимок кластера — без реального API. Удобно сразу
                   посмотреть UI сущностей.
                 </p>
@@ -247,6 +249,22 @@ export function ConnectPage() {
                   ? 'Открыть demo'
                   : 'Подключиться'}
             </button>
+            {user && (
+              <p className="mt-4 flex items-center justify-between gap-3 font-mono text-[11px] text-ink-400">
+                <span className="truncate" title={user.email || user.name}>
+                  {user.email || user.name}
+                </span>
+                <button
+                  type="button"
+                  className="shrink-0 text-ink-500 underline-offset-2 hover:text-ink-800 hover:underline"
+                  onClick={() => {
+                    void logout().then(() => navigate('/login'))
+                  }}
+                >
+                  Выйти
+                </button>
+              </p>
+            )}
           </form>
         </section>
       </div>

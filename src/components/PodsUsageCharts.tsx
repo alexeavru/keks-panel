@@ -63,12 +63,13 @@ function UsageCard({ title, hint, value, series, color, fill }: UsageCardProps) 
 }
 
 interface PodsUsageChartsProps {
-  namespace: string
+  namespace?: string
   podCount: number
   cpuMillis: number
   memoryMi: number
   cpuSeries: number[]
   memorySeries: number[]
+  hint?: string
 }
 
 export function PodsUsageCharts({
@@ -78,15 +79,16 @@ export function PodsUsageCharts({
   memoryMi,
   cpuSeries,
   memorySeries,
+  hint,
 }: PodsUsageChartsProps) {
   const scope = namespace ? namespace : 'все namespaces'
-  const hint = `${podCount} pods · ${scope}`
+  const caption = hint ?? `${podCount} pods · ${scope}`
 
   return (
     <div className="mb-6 grid gap-3 md:grid-cols-2">
       <UsageCard
         title="CPU"
-        hint={hint}
+        hint={caption}
         value={formatCpuMillis(cpuMillis)}
         series={cpuSeries}
         color="#2f9e6e"
@@ -94,7 +96,7 @@ export function PodsUsageCharts({
       />
       <UsageCard
         title="Memory"
-        hint={hint}
+        hint={caption}
         value={formatMemoryMi(memoryMi)}
         series={memorySeries}
         color="#d4892a"

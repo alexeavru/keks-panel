@@ -11,9 +11,12 @@ import {
   type V1StatefulSet,
   type V1ResourceRequirements,
   type V1Service,
+  type V1ConfigMap,
 } from '@kubernetes/client-node'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import https from 'node:https'
+import type { RequestOptions } from 'node:https'
 
 export interface KubeContextInfo {
   name: string
@@ -63,11 +66,15 @@ export function listContexts(): { path: string; contexts: KubeContextInfo[] } {
 }
 
 export function getApis(contextName: string): {
+  kc: KubeConfig
   core: CoreV1Api
   apps: AppsV1Api
   metrics: Metrics
   server: string
   context: string
+  clusterName: string
+  user: string
+  namespace?: string
 } {
   const kc = loadKubeConfig()
   const ctx = kc.contexts.find((c) => c.name === contextName)
@@ -82,11 +89,49 @@ export function getApis(contextName: string): {
   }
 
   return {
+    kc,
     core: kc.makeApiClient(CoreV1Api),
     apps: kc.makeApiClient(AppsV1Api),
     metrics: new Metrics(kc),
     server: cluster.server,
     context: contextName,
+    clusterName: cluster.name,
+    user: kc.getCurrentUser()?.name ?? ctx.user,
+    namespace: ctx.namespace,
+  }
+}
+
+async function readClusterVersion(
+  kc: KubeConfig,
+  server: string,
+): Promise<{ version: string; platform?: string }> {
+  const base = server.endsWith('/') ? server : `${server}/`
+  const url = new URL('version', base)
+  const opts: RequestOptions = {
+    protocol: url.protocol,
+    hostname: url.hostname,
+    port: url.port || undefined,
+    path: `${url.pathname}${url.search}`,
+    method: 'GET',
+  }
+  try {
+    await kc.applyToHTTPSOptions(opts)
+    const body = await new Promise<string>((resolve, reject) => {
+      const req = https.request(opts, (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk) => chunks.push(chunk as Buffer))
+        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+      })
+      req.on('error', reject)
+      req.end()
+    })
+    const json = JSON.parse(body) as { gitVersion?: string; platform?: string }
+    return {
+      version: json.gitVersion || '—',
+      platform: json.platform,
+    }
+  } catch {
+    return { version: '—' }
   }
 }
 
@@ -354,6 +399,15 @@ export function mapService(svc: V1Service) {
   }
 }
 
+export function mapConfigMap(cm: V1ConfigMap) {
+  return {
+    kind: 'ConfigMap' as const,
+    metadata: meta(cm),
+    data: cm.data ?? {},
+    binaryDataKeys: Object.keys(cm.binaryData ?? {}),
+  }
+}
+
 export function mapNode(node: V1Node) {
   const labels = node.metadata?.labels ?? {}
   const roles = Object.keys(labels)
@@ -380,21 +434,37 @@ export function mapNode(node: V1Node) {
 }
 
 export async function fetchSnapshot(contextName: string) {
-  const { core, apps, metrics, server, context } = getApis(contextName)
+  const { kc, core, apps, metrics, server, context, clusterName, user, namespace } =
+    getApis(contextName)
 
-  const [nsRes, podRes, depRes, stsRes, svcRes, nodeRes, usageMap] = await Promise.all([
-    core.listNamespace(),
-    core.listPodForAllNamespaces(),
-    apps.listDeploymentForAllNamespaces(),
-    apps.listStatefulSetForAllNamespaces(),
-    core.listServiceForAllNamespaces(),
-    core.listNode(),
-    loadPodUsageMap(metrics),
-  ])
+  const [nsRes, podRes, depRes, stsRes, svcRes, cmRes, nodeRes, usageMap, version] =
+    await Promise.all([
+      core.listNamespace(),
+      core.listPodForAllNamespaces(),
+      apps.listDeploymentForAllNamespaces(),
+      apps.listStatefulSetForAllNamespaces(),
+      core.listServiceForAllNamespaces(),
+      core.listConfigMapForAllNamespaces(),
+      core.listNode(),
+      loadPodUsageMap(metrics),
+      readClusterVersion(kc, server),
+    ])
+
+  const nodes = (nodeRes.items ?? []).map(mapNode)
+  const fallbackVersion = nodes.find((n) => n.status.version)?.status.version
 
   return {
     context,
     server,
+    info: {
+      name: clusterName,
+      context,
+      server,
+      user,
+      namespace,
+      version: version.version !== '—' ? version.version : fallbackVersion ?? '—',
+      platform: version.platform,
+    },
     namespaces: (nsRes.items ?? []).map(mapNamespace),
     pods: (podRes.items ?? []).map((p) =>
       mapPod(p, usageMap.get(podKey(p.metadata?.namespace, p.metadata?.name))),
@@ -402,7 +472,8 @@ export async function fetchSnapshot(contextName: string) {
     deployments: (depRes.items ?? []).map(mapDeployment),
     statefulSets: (stsRes.items ?? []).map(mapStatefulSet),
     services: (svcRes.items ?? []).map(mapService),
-    nodes: (nodeRes.items ?? []).map(mapNode),
+    configMaps: (cmRes.items ?? []).map(mapConfigMap),
+    nodes,
   }
 }
 

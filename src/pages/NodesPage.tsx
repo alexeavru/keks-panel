@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useCluster } from '@/context/ClusterContext'
 import { listNodes } from '@/lib/k8s-client'
-import { formatAge } from '@/lib/format'
+import { formatAge, formatMemoryMi, parseMemoryToMi } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { SearchInput } from '@/components/SearchInput'
 import { ResourceTable, type Column } from '@/components/ResourceTable'
 import { ResourceDrawer } from '@/components/ResourceDrawer'
 import { StatusBadge } from '@/components/StatusBadge'
 import type { Node } from '@/types/k8s'
+
+function formatNodeMemory(value?: string): string {
+  if (!value || value === '—') return '—'
+  return formatMemoryMi(parseMemoryToMi(value))
+}
 
 export function NodesPage() {
   const { connection } = useCluster()
@@ -79,7 +84,7 @@ export function NodesPage() {
       header: 'Memory',
       render: (row) => (
         <span className="font-mono text-xs">
-          {row.status.allocatableMemory} / {row.status.memory}
+          {formatNodeMemory(row.status.allocatableMemory)} / {formatNodeMemory(row.status.memory)}
         </span>
       ),
     },

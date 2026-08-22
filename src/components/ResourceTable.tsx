@@ -91,13 +91,13 @@ export function ResourceTable<T>({
                 return (
                   <th
                     key={col.key}
-                    className={`px-4 py-3 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-500 ${col.className ?? ''}`}
+                    className={`px-4 py-3 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-800 ${col.className ?? ''}`}
                   >
                     {sortable ? (
                       <button
                         type="button"
                         className={`inline-flex items-center gap-0.5 uppercase tracking-[0.1em] ${
-                          active ? 'text-ink-800' : 'hover:text-ink-700'
+                          active ? 'text-ink-900' : 'hover:text-ink-900'
                         }`}
                         onClick={() => toggleSort(col.key)}
                       >

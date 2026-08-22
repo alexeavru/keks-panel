@@ -5,6 +5,7 @@ import type {
   Node,
   Pod,
   Service,
+  ConfigMap,
   StatefulSet,
 } from '@/types/k8s'
 
@@ -295,6 +296,50 @@ const services: Service[] = [
   },
 ]
 
+const configMaps: ConfigMap[] = [
+  {
+    kind: 'ConfigMap',
+    metadata: {
+      name: 'api-gateway',
+      namespace: 'keks',
+      uid: 'cm-1',
+      creationTimestamp: ago(48),
+      labels: { app: 'api-gateway' },
+    },
+    data: {
+      'APP_ENV': 'production',
+      'LOG_LEVEL': 'info',
+      'gateway.yaml': 'listen: :8080\ntimeout: 30s\n',
+    },
+    binaryDataKeys: [],
+  },
+  {
+    kind: 'ConfigMap',
+    metadata: {
+      name: 'kube-root-ca.crt',
+      namespace: 'keks',
+      uid: 'cm-2',
+      creationTimestamp: ago(48),
+    },
+    data: { 'ca.crt': '-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----\n' },
+    binaryDataKeys: [],
+  },
+  {
+    kind: 'ConfigMap',
+    metadata: {
+      name: 'coredns',
+      namespace: 'kube-system',
+      uid: 'cm-3',
+      creationTimestamp: ago(700),
+      labels: { 'k8s-app': 'kube-dns' },
+    },
+    data: {
+      Corefile: '.:53 {\n  errors\n  health\n  kubernetes cluster.local in-addr.arpa ip6.arpa\n  forward . /etc/resolv.conf\n  cache 30\n}\n',
+    },
+    binaryDataKeys: [],
+  },
+]
+
 const nodes: Node[] = [
   {
     kind: 'Node',
@@ -358,7 +403,17 @@ export const demoSnapshot: ClusterSnapshot = {
   deployments,
   statefulSets,
   services,
+  configMaps,
   nodes,
+  info: {
+    name: 'demo-cluster',
+    context: 'demo',
+    server: 'https://127.0.0.1:6443',
+    user: 'demo',
+    namespace: 'keks',
+    version: 'v1.31.2',
+    platform: 'linux/amd64',
+  },
 }
 
 export function delay(ms = 350): Promise<void> {

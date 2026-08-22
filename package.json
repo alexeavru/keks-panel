@@ -1,7 +1,7 @@
 {
   "name": "keks-panel",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -10,6 +10,7 @@
     "dev": "concurrently -k -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",
     "dev:web": "vite",
     "dev:api": "tsx watch server/index.ts",
+    "dev:dex": "kubectl --context kind-keks -n dex port-forward svc/dex 5556:5556",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },
