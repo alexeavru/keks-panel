@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Box, Boxes, Database, FileCode, Layers, Network, Server } from 'lucide-react'
+import { Box, Boxes, Database, FileCode, Globe, Layers, Network, Server } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
 import { fetchSnapshot } from '@/lib/k8s-client'
 import { formatAge, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
@@ -75,6 +75,12 @@ export function OverviewPage() {
         },
         { label: 'Services', value: snap.services.length, to: '/cluster/services', icon: Network },
         {
+          label: 'Ingresses',
+          value: snap.ingresses.length,
+          to: '/cluster/ingresses',
+          icon: Globe,
+        },
+        {
           label: 'ConfigMaps',
           value: snap.configMaps.length,
           to: '/cluster/configmaps',
@@ -108,7 +114,7 @@ export function OverviewPage() {
 
       <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {loading && !snap
-          ? Array.from({ length: 7 }).map((_, i) => (
+          ? Array.from({ length: 8 }).map((_, i) => (
               <div key={i} className="surface h-28 animate-pulse" />
             ))
           : cards.map(({ label, value, to, icon: Icon }) => (
@@ -130,7 +136,9 @@ export function OverviewPage() {
 
       {snap?.info && (
         <section className="surface px-5 py-4">
-          <h2 className="mb-4 font-display text-lg font-bold text-ink-900">Кластер</h2>
+          <h2 className="mb-4 border-b border-ink-200/80 pb-4 font-display text-lg font-bold text-ink-900">
+            Кластер
+          </h2>
           <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
             {[
               { label: 'Context', value: snap.info.context },
@@ -146,12 +154,7 @@ export function OverviewPage() {
               },
               {
                 label: 'Режим',
-                value:
-                  connection?.mode === 'demo'
-                    ? 'demo'
-                    : connection?.mode === 'kubeconfig'
-                      ? 'kubeconfig'
-                      : connection?.mode ?? '—',
+                value: connection?.mode ?? '—',
               },
               {
                 label: 'Подключено',

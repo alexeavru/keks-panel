@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useCluster } from '@/context/ClusterContext'
 import { listNodes } from '@/lib/k8s-client'
 import { formatAge, formatMemoryMi, parseMemoryToMi } from '@/lib/format'
+import { GroupedNumber } from '@/components/GroupedNumber'
 import { PageHeader } from '@/components/PageHeader'
 import { SearchInput } from '@/components/SearchInput'
 import { ResourceTable, type Column } from '@/components/ResourceTable'
@@ -84,7 +85,9 @@ export function NodesPage() {
       header: 'Memory',
       render: (row) => (
         <span className="font-mono text-xs">
-          {formatNodeMemory(row.status.allocatableMemory)} / {formatNodeMemory(row.status.memory)}
+          <GroupedNumber value={formatNodeMemory(row.status.allocatableMemory)} />
+          {' / '}
+          <GroupedNumber value={formatNodeMemory(row.status.memory)} />
         </span>
       ),
     },

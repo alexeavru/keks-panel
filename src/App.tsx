@@ -10,6 +10,7 @@ import { PodsPage } from '@/pages/PodsPage'
 import { DeploymentsPage } from '@/pages/DeploymentsPage'
 import { StatefulSetsPage } from '@/pages/StatefulSetsPage'
 import { ServicesPage } from '@/pages/ServicesPage'
+import { IngressesPage } from '@/pages/IngressesPage'
 import { ConfigMapsPage } from '@/pages/ConfigMapsPage'
 import { NodesPage } from '@/pages/NodesPage'
 import { loadConnection } from '@/lib/connection-storage'
@@ -60,6 +61,7 @@ export default function App() {
               <Route path="deployments" element={<DeploymentsPage />} />
               <Route path="statefulsets" element={<StatefulSetsPage />} />
               <Route path="services" element={<ServicesPage />} />
+              <Route path="ingresses" element={<IngressesPage />} />
               <Route path="configmaps" element={<ConfigMapsPage />} />
             </Route>
 

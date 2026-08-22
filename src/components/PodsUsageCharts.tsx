@@ -1,4 +1,5 @@
 import { formatCpuMillis, formatMemoryMi } from '@/lib/format'
+import { GroupedNumber } from '@/components/GroupedNumber'
 import { useMemo } from 'react'
 
 interface SparklineProps {
@@ -54,7 +55,7 @@ function UsageCard({ title, hint, value, series, color, fill }: UsageCardProps) 
           <p className="mt-0.5 text-xs text-ink-400">{hint}</p>
         </div>
         <p className="shrink-0 font-mono text-2xl font-semibold leading-none tabular-nums tracking-tight text-ink-900">
-          {value}
+          <GroupedNumber value={value} />
         </p>
       </div>
       <Sparkline values={series} color={color} fill={fill} />

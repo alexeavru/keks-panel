@@ -1,3 +1,4 @@
+import { createServer } from 'node:http'
 import cors from 'cors'
 import express from 'express'
 import {
@@ -10,11 +11,15 @@ import {
   mapNamespace,
   mapNode,
   mapService,
+  mapIngress,
   mapConfigMap,
   listMappedPods,
+  getPodDetail,
+  getPodLogs,
   testContext,
 } from './k8s.js'
 import { handleCallback, logout, me, requireAuth, startLogin } from './auth.js'
+import { attachPodExec } from './exec.js'
 
 const app = express()
 const PORT = Number(process.env.KEKS_API_PORT || 8787)
@@ -118,6 +123,27 @@ app.get('/api/pods', async (req, res) => {
   }
 })
 
+app.get('/api/pods/:namespace/:name/logs', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const container = typeof req.query.container === 'string' ? req.query.container : ''
+    res.json(
+      await getPodLogs(context, req.params.namespace, req.params.name, container || undefined),
+    )
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/pods/:namespace/:name', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    res.json(await getPodDetail(context, req.params.namespace, req.params.name))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
 app.get('/api/deployments', async (req, res) => {
   try {
     const context = contextFromReq(req)
@@ -160,6 +186,20 @@ app.get('/api/services', async (req, res) => {
   }
 })
 
+app.get('/api/ingresses', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const namespace = typeof req.query.namespace === 'string' ? req.query.namespace : ''
+    const { net } = getApis(context)
+    const result = namespace
+      ? await net.listNamespacedIngress({ namespace })
+      : await net.listIngressForAllNamespaces()
+    res.json((result.items ?? []).map(mapIngress))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
 app.get('/api/configmaps', async (req, res) => {
   try {
     const context = contextFromReq(req)
@@ -185,7 +225,10 @@ app.get('/api/nodes', async (req, res) => {
   }
 })
 
-app.listen(PORT, () => {
+const server = createServer(app)
+attachPodExec(server)
+
+server.listen(PORT, () => {
   console.log(`KEKS API http://localhost:${PORT}`)
   console.log(`kubeconfig: ${kubeconfigPath()}`)
 })

@@ -40,6 +40,40 @@ body {
   background: transparent;
 }
 
+@layer utilities {
+  .bg-tri-grid {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48.5' height='28' viewBox='0 0 48.497 28'%3E%3Cg fill='none' stroke='%23121a17' stroke-opacity='0.045' stroke-width='0.55'%3E%3Cpath d='M0 0 V28 M24.249 0 V28'/%3E%3Cpath d='M0 0 L48.497 28'/%3E%3Cpath d='M0 28 L48.497 0'/%3E%3C/g%3E%3Cg fill='%23121a17' fill-opacity='0.09'%3E%3Ccircle cx='0' cy='0' r='1.15'/%3E%3Ccircle cx='24.249' cy='14' r='1.15'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: 26px 15px;
+  }
+}
+
+.pod-terminal .xterm {
+  height: 100%;
+}
+
+.pod-terminal .xterm-viewport {
+  background-color: transparent !important;
+}
+
+.pod-term-cursor {
+  position: absolute;
+  z-index: 8;
+  pointer-events: none;
+  background: #f5f7f6;
+  animation: pod-term-cursor-blink 1.05s step-end infinite;
+}
+
+.pod-terminal .xterm:not(.focus) .pod-term-cursor {
+  animation: none;
+  opacity: 0.55;
+}
+
+@keyframes pod-term-cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
 @layer components {
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 rounded-lg bg-ink-900 px-4 py-2.5 text-sm font-semibold text-ink-50 transition hover:bg-ink-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;

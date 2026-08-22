@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useCluster } from '@/context/ClusterContext'
 import { listPods } from '@/lib/k8s-client'
 import { formatAge, formatCpuMillis, formatMemoryMi, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
+import { GroupedNumber } from '@/components/GroupedNumber'
 import { PageHeader } from '@/components/PageHeader'
 import { SearchInput } from '@/components/SearchInput'
 import { ResourceTable, type Column } from '@/components/ResourceTable'
-import { ResourceDrawer } from '@/components/ResourceDrawer'
+import { PodDetails } from '@/components/PodDetails'
 import { StatusBadge, phaseTone } from '@/components/StatusBadge'
 import { PodsUsageCharts } from '@/components/PodsUsageCharts'
 import type { Pod } from '@/types/k8s'
@@ -15,6 +17,7 @@ const POLL_MS = 5000
 
 export function PodsPage() {
   const { connection, namespace: ns } = useCluster()
+  const location = useLocation()
   const [items, setItems] = useState<Pod[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
@@ -32,6 +35,12 @@ export function PodsPage() {
       if (!silent) setLoading(false)
     }
   }
+
+  const resetAt = (location.state as { reset?: number } | null)?.reset
+
+  useEffect(() => {
+    setSelected(null)
+  }, [location.key, resetAt, ns])
 
   useEffect(() => {
     void load()
@@ -132,9 +141,13 @@ export function PodsPage() {
           : undefined,
       render: (row) => (
         <span className="inline-block whitespace-nowrap font-mono text-xs text-ink-600">
-          {row.status.cpuUsage
-            ? formatCpuMillis(parseCpuToMillis(row.status.cpuUsage, row.status.cpuMillis))
-            : '—'}
+          {row.status.cpuUsage ? (
+            <GroupedNumber
+              value={formatCpuMillis(parseCpuToMillis(row.status.cpuUsage, row.status.cpuMillis))}
+            />
+          ) : (
+            '—'
+          )}
         </span>
       ),
     },
@@ -148,9 +161,13 @@ export function PodsPage() {
           : undefined,
       render: (row) => (
         <span className="inline-block whitespace-nowrap font-mono text-xs text-ink-600">
-          {row.status.memoryUsage
-            ? formatMemoryMi(parseMemoryToMi(row.status.memoryUsage, row.status.memoryMi))
-            : '—'}
+          {row.status.memoryUsage ? (
+            <GroupedNumber
+              value={formatMemoryMi(parseMemoryToMi(row.status.memoryUsage, row.status.memoryMi))}
+            />
+          ) : (
+            '—'
+          )}
         </span>
       ),
     },
@@ -174,40 +191,39 @@ export function PodsPage() {
 
   return (
     <div>
-      <PageHeader
-        title="Pods"
-        description="Запущенные и ожидающие контейнеры"
-        onRefresh={() => void load()}
-        refreshing={loading}
-        actions={<SearchInput value={query} onChange={setQuery} placeholder="Имя…" />}
-      />
-      <PodsUsageCharts
-        namespace={ns}
-        podCount={nsPods.length}
-        cpuMillis={totals.cpuMillis}
-        memoryMi={totals.memoryMi}
-        cpuSeries={cpuSeries}
-        memorySeries={memorySeries}
-      />
-      <ResourceTable
-        columns={columns}
-        rows={rows}
-        rowKey={(r) => r.metadata.uid}
-        loading={loading}
-        onRowClick={setSelected}
-        rowClassName={(r) =>
-          r.status.phase === 'Succeeded'
-            ? 'bg-slate-100/90 text-slate-500 hover:bg-slate-200/60 [&_p]:!text-slate-500 [&_span]:!text-slate-500'
-            : undefined
-        }
-      />
-      <ResourceDrawer
-        open={!!selected}
-        title={selected?.metadata.name ?? ''}
-        subtitle={`Pod · ${selected?.metadata.namespace ?? ''}`}
-        resource={selected}
-        onClose={() => setSelected(null)}
-      />
+      {selected ? (
+        <PodDetails pod={selected} onBack={() => setSelected(null)} />
+      ) : (
+        <>
+          <PageHeader
+            title="Pods"
+            description="Запущенные и ожидающие контейнеры"
+            onRefresh={() => void load()}
+            refreshing={loading}
+            actions={<SearchInput value={query} onChange={setQuery} placeholder="Имя…" />}
+          />
+          <PodsUsageCharts
+            namespace={ns}
+            podCount={nsPods.length}
+            cpuMillis={totals.cpuMillis}
+            memoryMi={totals.memoryMi}
+            cpuSeries={cpuSeries}
+            memorySeries={memorySeries}
+          />
+          <ResourceTable
+            columns={columns}
+            rows={rows}
+            rowKey={(r) => r.metadata.uid}
+            loading={loading}
+            onRowClick={setSelected}
+            rowClassName={(r) =>
+              r.status.phase === 'Succeeded'
+                ? 'bg-slate-100/90 text-slate-500 hover:bg-slate-200/60 [&_p]:!text-slate-500 [&_span]:!text-slate-500'
+                : undefined
+            }
+          />
+        </>
+      )}
     </div>
   )
 }

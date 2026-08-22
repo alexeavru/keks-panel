@@ -1,4 +1,3 @@
-import { demoSnapshot, delay } from '@/lib/mock-data'
 import type {
   ClusterConnection,
   ClusterSnapshot,
@@ -8,8 +7,10 @@ import type {
   Node,
   Pod,
   Service,
+  Ingress,
   ConfigMap,
   StatefulSet,
+  PodDetail,
 } from '@/types/k8s'
 
 export {
@@ -58,11 +59,6 @@ export async function fetchKubeContexts(): Promise<{
 }
 
 export async function testConnection(connection: ClusterConnection): Promise<ClusterConnection> {
-  if (connection.mode === 'demo') {
-    await delay(300)
-    return connection
-  }
-
   if (connection.mode === 'kubeconfig') {
     if (!connection.context?.trim()) {
       throw new Error('Выберите context из kubeconfig')
@@ -84,17 +80,10 @@ export async function testConnection(connection: ClusterConnection): Promise<Clu
   if (!connection.token.trim()) {
     throw new Error('Укажите Bearer-токен')
   }
-  throw new Error(
-    'Live по token пока не подключён. Используйте kubeconfig или Demo.',
-  )
+  throw new Error('Live по token пока не подключён. Используйте kubeconfig.')
 }
 
 export async function fetchSnapshot(connection: ClusterConnection): Promise<ClusterSnapshot> {
-  if (connection.mode === 'demo') {
-    await delay()
-    return structuredClone(demoSnapshot)
-  }
-
   if (connection.mode === 'kubeconfig') {
     return api(withContext('/api/snapshot', connection), {
       headers: contextHeaders(connection),
@@ -105,9 +94,6 @@ export async function fetchSnapshot(connection: ClusterConnection): Promise<Clus
 }
 
 export async function listNamespaces(connection: ClusterConnection): Promise<Namespace[]> {
-  if (connection.mode === 'demo') {
-    return (await fetchSnapshot(connection)).namespaces
-  }
   return api(withContext('/api/namespaces', connection), {
     headers: contextHeaders(connection),
   })
@@ -117,11 +103,32 @@ export async function listPods(
   connection: ClusterConnection,
   namespace?: string,
 ): Promise<Pod[]> {
-  if (connection.mode === 'demo') {
-    const snap = await fetchSnapshot(connection)
-    return namespace ? snap.pods.filter((p) => p.metadata.namespace === namespace) : snap.pods
-  }
   return api(withContext('/api/pods', connection, namespace), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function fetchPodDetail(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+): Promise<PodDetail> {
+  const path = `/api/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+  return api(withContext(path, connection), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function fetchPodLogs(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+  container?: string,
+): Promise<{ logs: string; container: string; containers: string[] }> {
+  const path = `/api/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs`
+  const url = new URL(withContext(path, connection), window.location.origin)
+  if (container) url.searchParams.set('container', container)
+  return api(url.pathname + url.search, {
     headers: contextHeaders(connection),
   })
 }
@@ -130,12 +137,6 @@ export async function listDeployments(
   connection: ClusterConnection,
   namespace?: string,
 ): Promise<Deployment[]> {
-  if (connection.mode === 'demo') {
-    const snap = await fetchSnapshot(connection)
-    return namespace
-      ? snap.deployments.filter((d) => d.metadata.namespace === namespace)
-      : snap.deployments
-  }
   return api(withContext('/api/deployments', connection, namespace), {
     headers: contextHeaders(connection),
   })
@@ -145,12 +146,6 @@ export async function listStatefulSets(
   connection: ClusterConnection,
   namespace?: string,
 ): Promise<StatefulSet[]> {
-  if (connection.mode === 'demo') {
-    const snap = await fetchSnapshot(connection)
-    return namespace
-      ? snap.statefulSets.filter((s) => s.metadata.namespace === namespace)
-      : snap.statefulSets
-  }
   return api(withContext('/api/statefulsets', connection, namespace), {
     headers: contextHeaders(connection),
   })
@@ -160,13 +155,16 @@ export async function listServices(
   connection: ClusterConnection,
   namespace?: string,
 ): Promise<Service[]> {
-  if (connection.mode === 'demo') {
-    const snap = await fetchSnapshot(connection)
-    return namespace
-      ? snap.services.filter((s) => s.metadata.namespace === namespace)
-      : snap.services
-  }
   return api(withContext('/api/services', connection, namespace), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listIngresses(
+  connection: ClusterConnection,
+  namespace?: string,
+): Promise<Ingress[]> {
+  return api(withContext('/api/ingresses', connection, namespace), {
     headers: contextHeaders(connection),
   })
 }
@@ -175,24 +173,35 @@ export async function listConfigMaps(
   connection: ClusterConnection,
   namespace?: string,
 ): Promise<ConfigMap[]> {
-  if (connection.mode === 'demo') {
-    const snap = await fetchSnapshot(connection)
-    return namespace
-      ? snap.configMaps.filter((c) => c.metadata.namespace === namespace)
-      : snap.configMaps
-  }
   return api(withContext('/api/configmaps', connection, namespace), {
     headers: contextHeaders(connection),
   })
 }
 
 export async function listNodes(connection: ClusterConnection): Promise<Node[]> {
-  if (connection.mode === 'demo') {
-    return (await fetchSnapshot(connection)).nodes
-  }
   return api(withContext('/api/nodes', connection), {
     headers: contextHeaders(connection),
   })
+}
+
+export function podExecWebSocketUrl(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+  container?: string,
+  size?: { cols: number; rows: number },
+): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const url = new URL(
+    `${proto}//${window.location.host}/api/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/exec`,
+  )
+  if (connection.context) url.searchParams.set('context', connection.context)
+  if (container) url.searchParams.set('container', container)
+  if (size) {
+    url.searchParams.set('cols', String(size.cols))
+    url.searchParams.set('rows', String(size.rows))
+  }
+  return url.toString()
 }
 
 export function resourceToYaml(obj: unknown): string {

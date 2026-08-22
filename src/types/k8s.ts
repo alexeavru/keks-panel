@@ -4,10 +4,11 @@ export type ResourceKind =
   | 'Deployment'
   | 'StatefulSet'
   | 'Service'
+  | 'Ingress'
   | 'ConfigMap'
   | 'Node'
 
-export type ConnectionMode = 'demo' | 'kubeconfig' | 'live'
+export type ConnectionMode = 'kubeconfig' | 'live'
 
 export interface KubeContextInfo {
   name: string
@@ -69,6 +70,41 @@ export interface Pod {
   }
 }
 
+export interface PodContainerInfo {
+  name: string
+  image: string
+  ready: boolean
+  restarts: number
+  state: string
+  init: boolean
+}
+
+export interface PodConditionInfo {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+}
+
+export interface PodDetail {
+  info: Pod & {
+    spec: Pod['spec'] & {
+      serviceAccount?: string
+      restartPolicy?: string
+      qosClass?: string
+    }
+    status: Pod['status'] & {
+      hostIP?: string
+      startTime?: string
+      qosClass?: string
+    }
+    containers: PodContainerInfo[]
+    conditions: PodConditionInfo[]
+    volumes: string[]
+  }
+  yaml: string
+}
+
 export interface Deployment {
   kind: 'Deployment'
   metadata: K8sObjectMeta
@@ -108,6 +144,19 @@ export interface Service {
   }
 }
 
+export interface Ingress {
+  kind: 'Ingress'
+  metadata: K8sObjectMeta
+  spec: {
+    className: string
+    hosts: string[]
+    tls: boolean
+  }
+  status: {
+    address: string
+  }
+}
+
 export interface ConfigMap {
   kind: 'ConfigMap'
   metadata: K8sObjectMeta
@@ -139,7 +188,15 @@ export interface ClusterInfo {
   platform?: string
 }
 
-export type K8sResource = Namespace | Pod | Deployment | StatefulSet | Service | ConfigMap | Node
+export type K8sResource =
+  | Namespace
+  | Pod
+  | Deployment
+  | StatefulSet
+  | Service
+  | Ingress
+  | ConfigMap
+  | Node
 
 export interface ClusterSnapshot {
   namespaces: Namespace[]
@@ -147,6 +204,7 @@ export interface ClusterSnapshot {
   deployments: Deployment[]
   statefulSets: StatefulSet[]
   services: Service[]
+  ingresses: Ingress[]
   configMaps: ConfigMap[]
   nodes: Node[]
   info: ClusterInfo

@@ -44,6 +44,9 @@ export function parseMemoryToMi(value?: string, mi?: number): number {
   return Number(s) || 0
 }
 
+/** Marker for thousands grouping; render with a CSS gap, not as a full mono space. */
+export const THIN_SPACE = '\u202F'
+
 export function groupThousands(n: number, fractionDigits?: number): string {
   const sign = n < 0 ? '-' : ''
   const abs = Math.abs(n)
@@ -56,18 +59,18 @@ export function groupThousands(n: number, fractionDigits?: number): string {
   } else {
     intPart = String(Math.round(abs))
   }
-  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F')
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, THIN_SPACE)
   return fracPart ? `${sign}${grouped}.${fracPart}` : `${sign}${grouped}`
 }
 
 export function formatCpuMillis(millis: number): string {
-  if (millis < 1000) return `${groupThousands(Math.round(millis))}m`
+  if (millis < 1000) return `${groupThousands(Math.round(millis))}${THIN_SPACE}m`
   const cores = millis / 1000
   return Number.isInteger(cores) ? groupThousands(cores) : groupThousands(cores, 2)
 }
 
 export function formatMemoryMi(mi: number): string {
-  if (mi <= 0) return '0Mi'
-  if (mi < 1) return `${mi.toFixed(1)}Mi`
-  return `${groupThousands(Math.round(mi))}Mi`
+  if (mi <= 0) return `0${THIN_SPACE}Mi`
+  if (mi < 1) return `${mi.toFixed(1)}${THIN_SPACE}Mi`
+  return `${groupThousands(Math.round(mi))}${THIN_SPACE}Mi`
 }

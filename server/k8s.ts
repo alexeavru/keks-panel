@@ -3,11 +3,14 @@ import {
   CoreV1Api,
   KubeConfig,
   Metrics,
+  NetworkingV1Api,
   type PodMetric,
   type V1Deployment,
+  type V1Ingress,
   type V1Namespace,
   type V1Node,
   type V1Pod,
+  type V1ContainerStatus,
   type V1StatefulSet,
   type V1ResourceRequirements,
   type V1Service,
@@ -69,6 +72,7 @@ export function getApis(contextName: string): {
   kc: KubeConfig
   core: CoreV1Api
   apps: AppsV1Api
+  net: NetworkingV1Api
   metrics: Metrics
   server: string
   context: string
@@ -92,6 +96,7 @@ export function getApis(contextName: string): {
     kc,
     core: kc.makeApiClient(CoreV1Api),
     apps: kc.makeApiClient(AppsV1Api),
+    net: kc.makeApiClient(NetworkingV1Api),
     metrics: new Metrics(kc),
     server: cluster.server,
     context: contextName,
@@ -334,6 +339,156 @@ export async function listMappedPods(contextName: string, namespace?: string) {
   )
 }
 
+function containerState(status?: V1ContainerStatus): string {
+  if (!status?.state) return 'Unknown'
+  if (status.state.running) return 'Running'
+  if (status.state.waiting) return status.state.waiting.reason || 'Waiting'
+  if (status.state.terminated) return status.state.terminated.reason || 'Terminated'
+  return 'Unknown'
+}
+
+function mapContainer(
+  name: string,
+  image: string,
+  status: V1ContainerStatus | undefined,
+  init: boolean,
+) {
+  return {
+    name,
+    image,
+    ready: status?.ready ?? false,
+    restarts: status?.restartCount ?? 0,
+    state: containerState(status),
+    init,
+  }
+}
+
+function toYaml(value: unknown, indent = 0): string {
+  const pad = '  '.repeat(indent)
+  if (value === null || value === undefined) return `${pad}null`
+  if (typeof value === 'string') {
+    if (value.includes('\n')) {
+      return [`${pad}|`, ...value.split('\n').map((line) => `${pad}  ${line}`)].join('\n')
+    }
+    if (value === '' || /[:#{}[\],&*!|>'%@`]/.test(value) || /^\s|\s$/.test(value)) {
+      return `${pad}${JSON.stringify(value)}`
+    }
+    return `${pad}${value}`
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return `${pad}${value}`
+  if (Array.isArray(value)) {
+    if (value.length === 0) return `${pad}[]`
+    return value
+      .map((item) => {
+        if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+          const inner = toYaml(item, indent + 1)
+          const [first, ...rest] = inner.split('\n')
+          const firstLine = first.replace(/^\s+/, '')
+          return [`${pad}- ${firstLine}`, ...rest].join('\n')
+        }
+        const inner = toYaml(item, 0).trim()
+        return `${pad}- ${inner}`
+      })
+      .join('\n')
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined)
+    if (entries.length === 0) return `${pad}{}`
+    return entries
+      .map(([key, val]) => {
+        if (val !== null && typeof val === 'object') {
+          return `${pad}${key}:\n${toYaml(val, indent + 1)}`
+        }
+        return `${pad}${key}: ${toYaml(val, 0).trim()}`
+      })
+      .join('\n')
+  }
+  return `${pad}${String(value)}`
+}
+
+function sanitizeManifest(pod: V1Pod): unknown {
+  const raw = JSON.parse(JSON.stringify(pod)) as {
+    metadata?: Record<string, unknown>
+  }
+  if (raw.metadata) delete raw.metadata.managedFields
+  return raw
+}
+
+export async function getPodDetail(contextName: string, namespace: string, name: string) {
+  const { core, metrics } = getApis(contextName)
+  const pod = await core.readNamespacedPod({ name, namespace })
+  const usageMap = await loadPodUsageMap(metrics, namespace)
+  const mapped = mapPod(pod, usageMap.get(podKey(namespace, name)))
+  const statuses = new Map((pod.status?.containerStatuses ?? []).map((s) => [s.name, s]))
+  const initStatuses = new Map((pod.status?.initContainerStatuses ?? []).map((s) => [s.name, s]))
+
+  const containers = [
+    ...(pod.spec?.initContainers ?? []).map((c) =>
+      mapContainer(c.name, c.image ?? '', initStatuses.get(c.name), true),
+    ),
+    ...(pod.spec?.containers ?? []).map((c) =>
+      mapContainer(c.name, c.image ?? '', statuses.get(c.name), false),
+    ),
+  ]
+
+  const start = pod.status?.startTime
+  const startTime =
+    start instanceof Date ? start.toISOString() : typeof start === 'string' ? start : undefined
+
+  return {
+    info: {
+      ...mapped,
+      spec: {
+        ...mapped.spec,
+        serviceAccount: pod.spec?.serviceAccountName,
+        restartPolicy: pod.spec?.restartPolicy,
+        qosClass: pod.status?.qosClass,
+      },
+      status: {
+        ...mapped.status,
+        hostIP: pod.status?.hostIP,
+        startTime,
+        qosClass: pod.status?.qosClass,
+      },
+      containers,
+      conditions: (pod.status?.conditions ?? []).map((c) => ({
+        type: c.type ?? '',
+        status: c.status ?? '',
+        reason: c.reason,
+        message: c.message,
+      })),
+      volumes: (pod.spec?.volumes ?? []).map((v) => v.name),
+    },
+    yaml: `${toYaml(sanitizeManifest(pod))}\n`,
+  }
+}
+
+export async function getPodLogs(
+  contextName: string,
+  namespace: string,
+  name: string,
+  container?: string,
+) {
+  const { core } = getApis(contextName)
+  const pod = await core.readNamespacedPod({ name, namespace })
+  const names = [
+    ...(pod.spec?.initContainers ?? []).map((c) => c.name),
+    ...(pod.spec?.containers ?? []).map((c) => c.name),
+  ]
+  const selected = container && names.includes(container) ? container : names[0]
+  if (!selected) {
+    return { logs: '', container: '', containers: names }
+  }
+  const logs = await core.readNamespacedPodLog({
+    name,
+    namespace,
+    container: selected,
+    timestamps: true,
+    tailLines: 500,
+  })
+  return { logs: logs || '', container: selected, containers: names }
+}
+
 export function mapDeployment(dep: V1Deployment) {
   const matchLabels = dep.spec?.selector?.matchLabels ?? {}
   const selector = Object.entries(matchLabels)
@@ -399,6 +554,35 @@ export function mapService(svc: V1Service) {
   }
 }
 
+export function mapIngress(ing: V1Ingress) {
+  const hosts = [
+    ...new Set(
+      (ing.spec?.rules ?? [])
+        .map((rule) => rule.host?.trim())
+        .filter((host): host is string => Boolean(host)),
+    ),
+  ]
+  const addresses = (ing.status?.loadBalancer?.ingress ?? [])
+    .map((item) => item.ip || item.hostname)
+    .filter((value): value is string => Boolean(value))
+
+  return {
+    kind: 'Ingress' as const,
+    metadata: meta(ing),
+    spec: {
+      className:
+        ing.spec?.ingressClassName ||
+        ing.metadata?.annotations?.['kubernetes.io/ingress.class'] ||
+        '—',
+      hosts,
+      tls: (ing.spec?.tls?.length ?? 0) > 0,
+    },
+    status: {
+      address: addresses.join(', ') || '—',
+    },
+  }
+}
+
 export function mapConfigMap(cm: V1ConfigMap) {
   return {
     kind: 'ConfigMap' as const,
@@ -434,16 +618,17 @@ export function mapNode(node: V1Node) {
 }
 
 export async function fetchSnapshot(contextName: string) {
-  const { kc, core, apps, metrics, server, context, clusterName, user, namespace } =
+  const { kc, core, apps, net, metrics, server, context, clusterName, user, namespace } =
     getApis(contextName)
 
-  const [nsRes, podRes, depRes, stsRes, svcRes, cmRes, nodeRes, usageMap, version] =
+  const [nsRes, podRes, depRes, stsRes, svcRes, ingRes, cmRes, nodeRes, usageMap, version] =
     await Promise.all([
       core.listNamespace(),
       core.listPodForAllNamespaces(),
       apps.listDeploymentForAllNamespaces(),
       apps.listStatefulSetForAllNamespaces(),
       core.listServiceForAllNamespaces(),
+      net.listIngressForAllNamespaces(),
       core.listConfigMapForAllNamespaces(),
       core.listNode(),
       loadPodUsageMap(metrics),
@@ -472,6 +657,7 @@ export async function fetchSnapshot(contextName: string) {
     deployments: (depRes.items ?? []).map(mapDeployment),
     statefulSets: (stsRes.items ?? []).map(mapStatefulSet),
     services: (svcRes.items ?? []).map(mapService),
+    ingresses: (ingRes.items ?? []).map(mapIngress),
     configMaps: (cmRes.items ?? []).map(mapConfigMap),
     nodes,
   }

@@ -7,6 +7,11 @@ export function loadConnection(): ClusterConnection | null {
     const raw = localStorage.getItem(STORAGE_KEY) ?? sessionStorage.getItem(STORAGE_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as ClusterConnection
+    if ((parsed as { mode?: string }).mode === 'demo') {
+      localStorage.removeItem(STORAGE_KEY)
+      sessionStorage.removeItem(STORAGE_KEY)
+      return null
+    }
     // migrate session → local
     localStorage.setItem(STORAGE_KEY, raw)
     return parsed

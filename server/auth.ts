@@ -83,8 +83,9 @@ function unsign(token: string, secret: string): string | null {
   }
 }
 
-export function readUser(req: Request): AuthUser | null {
-  const raw = parseCookies(req.headers.cookie)[SESSION_COOKIE]
+export function readUserFromCookieHeader(cookieHeader?: string | string[]): AuthUser | null {
+  const header = Array.isArray(cookieHeader) ? cookieHeader.join('; ') : cookieHeader
+  const raw = parseCookies(header)[SESSION_COOKIE]
   if (!raw) return null
   const json = unsign(raw, dexConfig().sessionSecret)
   if (!json) return null
@@ -95,6 +96,10 @@ export function readUser(req: Request): AuthUser | null {
   } catch {
     return null
   }
+}
+
+export function readUser(req: Request): AuthUser | null {
+  return readUserFromCookieHeader(req.headers.cookie)
 }
 
 function pkce(verifier: string): string {
