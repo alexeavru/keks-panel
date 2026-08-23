@@ -9,8 +9,12 @@ import type {
   Service,
   Ingress,
   ConfigMap,
+  PersistentVolume,
+  PersistentVolumeClaim,
+  StorageClass,
   StatefulSet,
   PodDetail,
+  PodEvent,
 } from '@/types/k8s'
 
 export {
@@ -119,6 +123,32 @@ export async function fetchPodDetail(
   })
 }
 
+export async function savePodYaml(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+  yaml: string,
+): Promise<PodDetail> {
+  const path = `/api/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+  return api(withContext(path, connection), {
+    method: 'PUT',
+    headers: contextHeaders(connection),
+    body: JSON.stringify({ yaml }),
+  })
+}
+
+export async function deletePod(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+): Promise<void> {
+  const path = `/api/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+  await api(withContext(path, connection), {
+    method: 'DELETE',
+    headers: contextHeaders(connection),
+  })
+}
+
 export async function fetchPodLogs(
   connection: ClusterConnection,
   namespace: string,
@@ -128,6 +158,20 @@ export async function fetchPodLogs(
   const path = `/api/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs`
   const url = new URL(withContext(path, connection), window.location.origin)
   if (container) url.searchParams.set('container', container)
+  return api(url.pathname + url.search, {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function fetchPodEvents(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+  uid?: string,
+): Promise<PodEvent[]> {
+  const path = `/api/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/events`
+  const url = new URL(withContext(path, connection), window.location.origin)
+  if (uid) url.searchParams.set('uid', uid)
   return api(url.pathname + url.search, {
     headers: contextHeaders(connection),
   })
@@ -174,6 +218,31 @@ export async function listConfigMaps(
   namespace?: string,
 ): Promise<ConfigMap[]> {
   return api(withContext('/api/configmaps', connection, namespace), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listPersistentVolumes(
+  connection: ClusterConnection,
+): Promise<PersistentVolume[]> {
+  return api(withContext('/api/persistentvolumes', connection), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listPersistentVolumeClaims(
+  connection: ClusterConnection,
+  namespace?: string,
+): Promise<PersistentVolumeClaim[]> {
+  return api(withContext('/api/persistentvolumeclaims', connection, namespace), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listStorageClasses(
+  connection: ClusterConnection,
+): Promise<StorageClass[]> {
+  return api(withContext('/api/storageclasses', connection), {
     headers: contextHeaders(connection),
   })
 }

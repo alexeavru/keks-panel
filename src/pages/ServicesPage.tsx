@@ -103,8 +103,6 @@ export function ServicesPage() {
       <PageHeader
         title="Services"
         description="Сетевые эндпоинты внутри кластера"
-        onRefresh={load}
-        refreshing={loading}
         actions={<SearchInput value={query} onChange={setQuery} placeholder="Имя…" />}
       />
       <ResourceTable

@@ -8,6 +8,7 @@ import {
   LogOut,
   Network,
   Server,
+  HardDrive,
   Layers,
   type LucideIcon,
 } from 'lucide-react'
@@ -34,10 +35,17 @@ const networkingNav = [
   { to: '/cluster/ingresses', label: 'Ingresses' },
 ]
 
+const storageNav = [
+  { to: '/cluster/persistentvolumes', label: 'PersistentVolumes' },
+  { to: '/cluster/persistentvolumeclaims', label: 'PersistentVolumeClaims' },
+  { to: '/cluster/storageclasses', label: 'StorageClasses' },
+]
+
 const bottomNav = [{ to: '/cluster/nodes', label: 'Nodes', icon: Server }]
 
 const WORKLOAD_KEY = 'keks.nav.workload'
 const NETWORKING_KEY = 'keks.nav.networking'
+const STORAGE_KEY = 'keks.nav.storage'
 
 function loadNavOpen(key: string): boolean {
   try {
@@ -148,6 +156,7 @@ export function AppShell() {
   const [namespaces, setNamespaces] = useState<string[]>([])
   const [workloadOpen, setWorkloadOpen] = useState(() => loadNavOpen(WORKLOAD_KEY))
   const [networkingOpen, setNetworkingOpen] = useState(() => loadNavOpen(NETWORKING_KEY))
+  const [storageOpen, setStorageOpen] = useState(() => loadNavOpen(STORAGE_KEY))
 
   useEffect(() => {
     if (!connection) return
@@ -196,6 +205,14 @@ export function AppShell() {
     })
   }
 
+  const toggleStorage = () => {
+    setStorageOpen((open) => {
+      const next = !open
+      persistNavOpen(STORAGE_KEY, next)
+      return next
+    })
+  }
+
   return (
     <div className="flex min-h-screen bg-ink-50 bg-tri-grid">
         <aside className="sticky top-0 flex h-screen w-[240px] shrink-0 flex-col border-r border-ink-200/70 bg-white/80 px-4 py-5 backdrop-blur-md">
@@ -204,7 +221,7 @@ export function AppShell() {
               KEKS
             </p>
             <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">
-              panel · 0.3.1
+              panel · 0.3.3
             </p>
           </div>
 
@@ -239,6 +256,14 @@ export function AppShell() {
               open={networkingOpen}
               onToggle={toggleNetworking}
               items={networkingNav}
+            />
+
+            <NavGroup
+              title="Storage"
+              icon={HardDrive}
+              open={storageOpen}
+              onToggle={toggleStorage}
+              items={storageNav}
             />
 
             {bottomNav.map(({ to, label, icon: Icon }) => (

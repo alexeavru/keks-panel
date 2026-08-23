@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Box, Boxes, Database, FileCode, Globe, Layers, Network, Server } from 'lucide-react'
+import { Box, Boxes, Database, FileCode, Globe, HardDrive, Layers, Network, Server } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
 import { fetchSnapshot } from '@/lib/k8s-client'
 import { formatAge, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { PodsUsageCharts } from '@/components/PodsUsageCharts'
+import { TopNamespaces } from '@/components/TopNamespaces'
 import type { ClusterSnapshot } from '@/types/k8s'
 
 const HISTORY = 60
@@ -86,6 +87,24 @@ export function OverviewPage() {
           to: '/cluster/configmaps',
           icon: FileCode,
         },
+        {
+          label: 'PersistentVolumes',
+          value: snap.persistentVolumes.length,
+          to: '/cluster/persistentvolumes',
+          icon: HardDrive,
+        },
+        {
+          label: 'PersistentVolumeClaims',
+          value: snap.persistentVolumeClaims.length,
+          to: '/cluster/persistentvolumeclaims',
+          icon: HardDrive,
+        },
+        {
+          label: 'StorageClasses',
+          value: snap.storageClasses.length,
+          to: '/cluster/storageclasses',
+          icon: Database,
+        },
         { label: 'Nodes', value: snap.nodes.length, to: '/cluster/nodes', icon: Server },
       ]
     : []
@@ -99,8 +118,6 @@ export function OverviewPage() {
             ? `${connection.name} · подключено ${formatAge(connection.connectedAt)} назад`
             : undefined
         }
-        onRefresh={() => void load()}
-        refreshing={loading}
       />
 
       <PodsUsageCharts
@@ -112,9 +129,11 @@ export function OverviewPage() {
         hint={`${totals.nodeCount} nodes · ${totals.podCount} pods · кластер`}
       />
 
-      <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <TopNamespaces pods={snap?.pods ?? []} />
+
+      <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {loading && !snap
-          ? Array.from({ length: 8 }).map((_, i) => (
+          ? Array.from({ length: 11 }).map((_, i) => (
               <div key={i} className="surface h-28 animate-pulse" />
             ))
           : cards.map(({ label, value, to, icon: Icon }) => (
@@ -147,7 +166,6 @@ export function OverviewPage() {
               { label: 'User', value: snap.info.user },
               { label: 'Version', value: snap.info.version },
               { label: 'Platform', value: snap.info.platform ?? '—' },
-              { label: 'Namespace', value: snap.info.namespace || '—' },
               {
                 label: 'Nodes',
                 value: `${snap.nodes.filter((n) => n.status.ready).length} ready / ${snap.nodes.length}`,
@@ -161,7 +179,7 @@ export function OverviewPage() {
                 value: connection ? `${formatAge(connection.connectedAt)} назад` : '—',
               },
             ].map((row) => (
-              <div key={row.label} className="min-w-0">
+              <div key={row.label} className="min-w-0 rounded-lg bg-ink-50 px-3.5 py-3">
                 <dt className="font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-500">
                   {row.label}
                 </dt>

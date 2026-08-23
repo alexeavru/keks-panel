@@ -17,6 +17,16 @@ const tones: Record<BadgeTone, string> = {
   neutral: 'bg-ink-100 text-ink-600 ring-ink-200',
 }
 
+export const toneRow: Record<BadgeTone, string> = {
+  ok: 'bg-leaf-500/15',
+  info: 'bg-sky-500/15',
+  warn: 'bg-ember-400/20',
+  bad: 'bg-rose-500/15',
+  muted: 'bg-slate-200/80',
+  fade: 'bg-violet-500/15',
+  neutral: 'bg-ink-50',
+}
+
 export function StatusBadge({ tone, children }: StatusBadgeProps) {
   return (
     <span
@@ -53,6 +63,35 @@ export function phaseTone(phase: string): BadgeTone {
       return 'bad'
     case 'Unknown':
       return 'muted'
+    default:
+      return 'neutral'
+  }
+}
+
+export function podPhaseTone(state: string, ready: boolean): BadgeTone {
+  const key = state.replace(/^Init:/, '')
+  if (key === 'Running') return ready ? 'ok' : 'warn'
+  if (key === 'Completed' || key === 'Succeeded') return 'info'
+  if (key === 'Terminating') return 'fade'
+  if (key === 'Unknown') return 'muted'
+  if (key === 'Failed' || /Error|BackOff|OOMKilled|ErrImage/.test(key)) return 'bad'
+  if (key === 'Active') return 'ok'
+  return 'warn'
+}
+
+export function storagePhaseTone(phase: string): BadgeTone {
+  switch (phase) {
+    case 'Bound':
+      return 'ok'
+    case 'Available':
+      return 'info'
+    case 'Pending':
+      return 'warn'
+    case 'Released':
+      return 'fade'
+    case 'Failed':
+    case 'Lost':
+      return 'bad'
     default:
       return 'neutral'
   }

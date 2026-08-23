@@ -12,6 +12,9 @@ import { StatefulSetsPage } from '@/pages/StatefulSetsPage'
 import { ServicesPage } from '@/pages/ServicesPage'
 import { IngressesPage } from '@/pages/IngressesPage'
 import { ConfigMapsPage } from '@/pages/ConfigMapsPage'
+import { PersistentVolumesPage } from '@/pages/PersistentVolumesPage'
+import { PersistentVolumeClaimsPage } from '@/pages/PersistentVolumeClaimsPage'
+import { StorageClassesPage } from '@/pages/StorageClassesPage'
 import { NodesPage } from '@/pages/NodesPage'
 import { loadConnection } from '@/lib/connection-storage'
 
@@ -19,7 +22,7 @@ function RootRedirect() {
   const { user, loading } = useAuth()
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-wash bg-grid">
+      <div className="flex min-h-screen items-center justify-center bg-ink-50 bg-tri-grid">
         <p className="font-mono text-sm text-ink-500">Проверка сессии…</p>
       </div>
     )
@@ -63,6 +66,9 @@ export default function App() {
               <Route path="services" element={<ServicesPage />} />
               <Route path="ingresses" element={<IngressesPage />} />
               <Route path="configmaps" element={<ConfigMapsPage />} />
+              <Route path="persistentvolumes" element={<PersistentVolumesPage />} />
+              <Route path="persistentvolumeclaims" element={<PersistentVolumeClaimsPage />} />
+              <Route path="storageclasses" element={<StorageClassesPage />} />
             </Route>
 
             <Route path="*" element={<RootRedirect />} />

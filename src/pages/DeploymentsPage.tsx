@@ -99,8 +99,6 @@ export function DeploymentsPage() {
       <PageHeader
         title="Deployments"
         description="Контроллеры реплик приложений"
-        onRefresh={load}
-        refreshing={loading}
         actions={<SearchInput value={query} onChange={setQuery} placeholder="Имя…" />}
       />
       <ResourceTable

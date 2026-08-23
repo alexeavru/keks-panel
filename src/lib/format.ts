@@ -44,6 +44,31 @@ export function parseMemoryToMi(value?: string, mi?: number): number {
   return Number(s) || 0
 }
 
+export function parseStorageToBytes(value?: string): number | undefined {
+  if (!value || value === '—') return undefined
+  const m = value.trim().match(/^([0-9]*\.?[0-9]+)\s*([A-Za-z]+)?$/)
+  if (!m) return undefined
+  const n = Number(m[1])
+  if (!Number.isFinite(n)) return undefined
+  const unit = m[2] ?? ''
+  const mul: Record<string, number> = {
+    Ki: 1024,
+    Mi: 1024 ** 2,
+    Gi: 1024 ** 3,
+    Ti: 1024 ** 4,
+    Pi: 1024 ** 5,
+    Ei: 1024 ** 6,
+    k: 1e3,
+    K: 1e3,
+    M: 1e6,
+    G: 1e9,
+    T: 1e12,
+    P: 1e15,
+    E: 1e18,
+  }
+  return n * (mul[unit] ?? 1)
+}
+
 /** Marker for thousands grouping; render with a CSS gap, not as a full mono space. */
 export const THIN_SPACE = '\u202F'
 

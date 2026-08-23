@@ -71,7 +71,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-wash bg-grid">
+      <div className="flex min-h-screen items-center justify-center bg-ink-50 bg-tri-grid">
         <p className="font-mono text-sm text-ink-500">Проверка сессии…</p>
       </div>
     )

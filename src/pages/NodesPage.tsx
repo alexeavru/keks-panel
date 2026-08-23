@@ -107,8 +107,6 @@ export function NodesPage() {
       <PageHeader
         title="Nodes"
         description="Узлы кластера и их готовность"
-        onRefresh={load}
-        refreshing={loading}
         actions={<SearchInput value={query} onChange={setQuery} placeholder="Фильтр по имени…" />}
       />
       <ResourceTable

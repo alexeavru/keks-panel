@@ -68,11 +68,30 @@ export function IngressesPage() {
     {
       key: 'hosts',
       header: 'Hosts',
-      render: (row) => (
-        <span className="font-mono text-xs text-ink-700">
-          {row.spec.hosts.length > 0 ? row.spec.hosts.join(', ') : '*'}
-        </span>
-      ),
+      render: (row) => {
+        if (row.spec.hosts.length === 0) {
+          return <span className="font-mono text-xs text-ink-700">*</span>
+        }
+        const proto = row.spec.tls ? 'https' : 'http'
+        return (
+          <span className="font-mono text-xs">
+            {row.spec.hosts.map((host, i) => (
+              <span key={host}>
+                {i > 0 ? ', ' : null}
+                <a
+                  href={`${proto}://${host}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-leaf-600 underline-offset-2 hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {host}
+                </a>
+              </span>
+            ))}
+          </span>
+        )
+      },
     },
     {
       key: 'address',
@@ -106,8 +125,6 @@ export function IngressesPage() {
       <PageHeader
         title="Ingresses"
         description="Внешние HTTP(S) маршруты в сервисы"
-        onRefresh={load}
-        refreshing={loading}
         actions={<SearchInput value={query} onChange={setQuery} placeholder="Имя…" />}
       />
       <ResourceTable

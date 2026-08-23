@@ -13,9 +13,15 @@ import {
   mapService,
   mapIngress,
   mapConfigMap,
+  mapPersistentVolume,
+  mapPersistentVolumeClaim,
+  mapStorageClass,
   listMappedPods,
   getPodDetail,
   getPodLogs,
+  getPodEvents,
+  deletePod,
+  applyPodYaml,
   testContext,
 } from './k8s.js'
 import { handleCallback, logout, me, requireAuth, startLogin } from './auth.js'
@@ -25,7 +31,7 @@ const app = express()
 const PORT = Number(process.env.KEKS_API_PORT || 8787)
 
 app.use(cors({ origin: true, credentials: true }))
-app.use(express.json())
+app.use(express.json({ limit: '4mb' }))
 
 function contextFromReq(req: express.Request): string {
   const fromQuery = typeof req.query.context === 'string' ? req.query.context : ''
@@ -123,6 +129,18 @@ app.get('/api/pods', async (req, res) => {
   }
 })
 
+app.get('/api/pods/:namespace/:name/events', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const uid = typeof req.query.uid === 'string' ? req.query.uid : ''
+    res.json(
+      await getPodEvents(context, req.params.namespace, req.params.name, uid || undefined),
+    )
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
 app.get('/api/pods/:namespace/:name/logs', async (req, res) => {
   try {
     const context = contextFromReq(req)
@@ -139,6 +157,34 @@ app.get('/api/pods/:namespace/:name', async (req, res) => {
   try {
     const context = contextFromReq(req)
     res.json(await getPodDetail(context, req.params.namespace, req.params.name))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.put('/api/pods/:namespace/:name', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const yaml = typeof req.body?.yaml === 'string' ? req.body.yaml : ''
+    if (!yaml.trim()) {
+      res.status(400).json({ error: 'YAML пустой' })
+      return
+    }
+    res.json(await applyPodYaml(context, req.params.namespace, req.params.name, yaml))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const status = /Некорректный YAML|не совпадает|Ожидался kind|YAML должен|пустой/i.test(message)
+      ? 400
+      : 500
+    sendError(res, err, status)
+  }
+})
+
+app.delete('/api/pods/:namespace/:name', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    await deletePod(context, req.params.namespace, req.params.name)
+    res.json({ ok: true })
   } catch (err) {
     sendError(res, err)
   }
@@ -209,6 +255,42 @@ app.get('/api/configmaps', async (req, res) => {
       ? await core.listNamespacedConfigMap({ namespace })
       : await core.listConfigMapForAllNamespaces()
     res.json((result.items ?? []).map(mapConfigMap))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/persistentvolumes', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const { core } = getApis(context)
+    const result = await core.listPersistentVolume()
+    res.json((result.items ?? []).map(mapPersistentVolume))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/persistentvolumeclaims', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const namespace = typeof req.query.namespace === 'string' ? req.query.namespace : ''
+    const { core } = getApis(context)
+    const result = namespace
+      ? await core.listNamespacedPersistentVolumeClaim({ namespace })
+      : await core.listPersistentVolumeClaimForAllNamespaces()
+    res.json((result.items ?? []).map(mapPersistentVolumeClaim))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/storageclasses', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const { storage } = getApis(context)
+    const result = await storage.listStorageClass()
+    res.json((result.items ?? []).map(mapStorageClass))
   } catch (err) {
     sendError(res, err)
   }

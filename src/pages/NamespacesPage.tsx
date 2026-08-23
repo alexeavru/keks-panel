@@ -70,8 +70,6 @@ export function NamespacesPage() {
       <PageHeader
         title="Namespaces"
         description="Нажмите на namespace, чтобы открыть его pods"
-        onRefresh={load}
-        refreshing={loading}
         actions={<SearchInput value={query} onChange={setQuery} placeholder="Фильтр по имени…" />}
       />
       <ResourceTable

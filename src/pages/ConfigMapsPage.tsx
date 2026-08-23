@@ -99,8 +99,6 @@ export function ConfigMapsPage() {
       <PageHeader
         title="ConfigMaps"
         description="Конфигурация приложений в виде ключ–значение"
-        onRefresh={load}
-        refreshing={loading}
         actions={<SearchInput value={query} onChange={setQuery} placeholder="Имя…" />}
       />
       <ResourceTable

@@ -6,6 +6,9 @@ export type ResourceKind =
   | 'Service'
   | 'Ingress'
   | 'ConfigMap'
+  | 'PersistentVolume'
+  | 'PersistentVolumeClaim'
+  | 'StorageClass'
   | 'Node'
 
 export type ConnectionMode = 'kubeconfig' | 'live'
@@ -54,6 +57,7 @@ export interface Pod {
   }
   status: {
     phase: 'Pending' | 'Running' | 'Succeeded' | 'Failed' | 'Unknown'
+    state: string
     podIP?: string
     ready: boolean
     readyCount: number
@@ -103,6 +107,17 @@ export interface PodDetail {
     volumes: string[]
   }
   yaml: string
+}
+
+export interface PodEvent {
+  uid: string
+  type: string
+  reason: string
+  message: string
+  count: number
+  firstTimestamp?: string
+  lastTimestamp?: string
+  source: string
 }
 
 export interface Deployment {
@@ -164,6 +179,49 @@ export interface ConfigMap {
   binaryDataKeys: string[]
 }
 
+export interface PersistentVolume {
+  kind: 'PersistentVolume'
+  metadata: K8sObjectMeta
+  spec: {
+    capacity: string
+    accessModes: string
+    reclaimPolicy: string
+    storageClass: string
+    volumeMode: string
+    claim: string
+  }
+  status: {
+    phase: string
+  }
+}
+
+export interface PersistentVolumeClaim {
+  kind: 'PersistentVolumeClaim'
+  metadata: K8sObjectMeta
+  spec: {
+    volumeName: string
+    storageClass: string
+    accessModes: string
+    volumeMode: string
+  }
+  status: {
+    phase: string
+    capacity: string
+  }
+}
+
+export interface StorageClass {
+  kind: 'StorageClass'
+  metadata: K8sObjectMeta
+  spec: {
+    provisioner: string
+    reclaimPolicy: string
+    volumeBindingMode: string
+    allowVolumeExpansion: boolean
+    isDefault: boolean
+  }
+}
+
 export interface Node {
   kind: 'Node'
   metadata: K8sObjectMeta
@@ -196,6 +254,9 @@ export type K8sResource =
   | Service
   | Ingress
   | ConfigMap
+  | PersistentVolume
+  | PersistentVolumeClaim
+  | StorageClass
   | Node
 
 export interface ClusterSnapshot {
@@ -206,6 +267,9 @@ export interface ClusterSnapshot {
   services: Service[]
   ingresses: Ingress[]
   configMaps: ConfigMap[]
+  persistentVolumes: PersistentVolume[]
+  persistentVolumeClaims: PersistentVolumeClaim[]
+  storageClasses: StorageClass[]
   nodes: Node[]
   info: ClusterInfo
 }

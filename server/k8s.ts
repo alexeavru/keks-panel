@@ -4,6 +4,7 @@ import {
   KubeConfig,
   Metrics,
   NetworkingV1Api,
+  StorageV1Api,
   type PodMetric,
   type V1Deployment,
   type V1Ingress,
@@ -15,6 +16,9 @@ import {
   type V1ResourceRequirements,
   type V1Service,
   type V1ConfigMap,
+  type V1PersistentVolume,
+  type V1PersistentVolumeClaim,
+  type V1StorageClass,
 } from '@kubernetes/client-node'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -73,6 +77,7 @@ export function getApis(contextName: string): {
   core: CoreV1Api
   apps: AppsV1Api
   net: NetworkingV1Api
+  storage: StorageV1Api
   metrics: Metrics
   server: string
   context: string
@@ -97,6 +102,7 @@ export function getApis(contextName: string): {
     core: kc.makeApiClient(CoreV1Api),
     apps: kc.makeApiClient(AppsV1Api),
     net: kc.makeApiClient(NetworkingV1Api),
+    storage: kc.makeApiClient(StorageV1Api),
     metrics: new Metrics(kc),
     server: cluster.server,
     context: contextName,
@@ -202,6 +208,7 @@ export function mapPod(pod: V1Pod, usage?: { cpuMillis?: number; memoryBytes?: n
     },
     status: {
       phase,
+      state: podState(pod),
       podIP: pod.status?.podIP,
       ready,
       readyCount,
@@ -339,12 +346,154 @@ export async function listMappedPods(contextName: string, namespace?: string) {
   )
 }
 
+export async function deletePod(contextName: string, namespace: string, name: string) {
+  const { core } = getApis(contextName)
+  await core.deleteNamespacedPod({ name, namespace })
+}
+
+function k8sErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object' && 'body' in err) {
+    let body = (err as { body: unknown }).body
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body)
+      } catch {
+        if (body.trim()) return body
+      }
+    }
+    if (body && typeof body === 'object' && body !== null && 'message' in body) {
+      const message = (body as { message: unknown }).message
+      if (typeof message === 'string' && message.trim()) return message
+    }
+  }
+  return err instanceof Error ? err.message : String(err)
+}
+
+const YAML_STRING_KEYS = new Set(['resourceVersion', 'uid'])
+
+function stringifyLabelMap(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === undefined) continue
+    out[k] = v === null ? '' : String(v)
+  }
+  return out
+}
+
+function coerceYamlTypes(value: unknown, key?: string): unknown {
+  if (value instanceof Date) return value.toISOString()
+  if (Array.isArray(value)) return value.map((item) => coerceYamlTypes(item))
+  if (value && typeof value === 'object') {
+    if (key === 'labels' || key === 'annotations') return stringifyLabelMap(value)
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = coerceYamlTypes(v, k)
+    }
+    return out
+  }
+  if (key === 'status' && typeof value === 'boolean') return value ? 'True' : 'False'
+  if (key && YAML_STRING_KEYS.has(key) && typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+  return value
+}
+
+export async function applyPodYaml(
+  contextName: string,
+  namespace: string,
+  name: string,
+  yaml: string,
+) {
+  const { load } = await import('js-yaml')
+  let parsed: unknown
+  try {
+    parsed = coerceYamlTypes(load(yaml))
+  } catch (err) {
+    throw new Error(`Некорректный YAML: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('YAML должен содержать объект Pod')
+  }
+  const body = parsed as V1Pod
+  const kind = (body as { kind?: string }).kind
+  if (kind && kind !== 'Pod') {
+    throw new Error(`Ожидался kind: Pod, получен ${kind}`)
+  }
+  const metaName = body.metadata?.name
+  const metaNs = body.metadata?.namespace
+  if (metaName && metaName !== name) {
+    throw new Error(`Имя в YAML (${metaName}) не совпадает с подом ${name}`)
+  }
+  if (metaNs && metaNs !== namespace) {
+    throw new Error(`Namespace в YAML (${metaNs}) не совпадает с ${namespace}`)
+  }
+  body.apiVersion = body.apiVersion || 'v1'
+  body.kind = 'Pod'
+  body.metadata = {
+    ...body.metadata,
+    name,
+    namespace,
+  }
+  if (body.metadata && 'managedFields' in body.metadata) {
+    delete (body.metadata as { managedFields?: unknown }).managedFields
+  }
+
+  const { core } = getApis(contextName)
+  try {
+    await core.replaceNamespacedPod({ name, namespace, body })
+  } catch (err) {
+    throw new Error(k8sErrorMessage(err))
+  }
+  return getPodDetail(contextName, namespace, name)
+}
+
 function containerState(status?: V1ContainerStatus): string {
   if (!status?.state) return 'Unknown'
   if (status.state.running) return 'Running'
   if (status.state.waiting) return status.state.waiting.reason || 'Waiting'
   if (status.state.terminated) return status.state.terminated.reason || 'Terminated'
   return 'Unknown'
+}
+
+function podState(pod: V1Pod): string {
+  if (pod.metadata?.deletionTimestamp) return 'Terminating'
+
+  const initStatuses = pod.status?.initContainerStatuses ?? []
+  const initTotal = pod.spec?.initContainers?.length ?? initStatuses.length
+  for (let i = 0; i < initStatuses.length; i++) {
+    const state = initStatuses[i].state
+    if (state?.terminated && (state.terminated.exitCode ?? 0) === 0) continue
+    if (state?.terminated) {
+      return state.terminated.reason
+        ? `Init:${state.terminated.reason}`
+        : `Init:ExitCode:${state.terminated.exitCode ?? 0}`
+    }
+    if (state?.waiting?.reason && state.waiting.reason !== 'PodInitializing') {
+      return `Init:${state.waiting.reason}`
+    }
+    return `Init:${i}/${initTotal}`
+  }
+
+  let reason = pod.status?.reason || pod.status?.phase || 'Unknown'
+  let hasRunning = false
+  const statuses = pod.status?.containerStatuses ?? []
+  for (let i = statuses.length - 1; i >= 0; i--) {
+    const state = statuses[i].state
+    if (state?.waiting?.reason) reason = state.waiting.reason
+    else if (state?.terminated?.reason) reason = state.terminated.reason
+    else if (state?.terminated) reason = `ExitCode:${state.terminated.exitCode ?? 0}`
+    else if (state?.running && statuses[i].ready) hasRunning = true
+  }
+
+  if (reason === 'Completed' && hasRunning) {
+    const ready = (pod.status?.conditions ?? []).some(
+      (c) => c.type === 'Ready' && c.status === 'True',
+    )
+    return ready ? 'Running' : 'NotReady'
+  }
+
+  return reason
 }
 
 function mapContainer(
@@ -370,7 +519,13 @@ function toYaml(value: unknown, indent = 0): string {
     if (value.includes('\n')) {
       return [`${pad}|`, ...value.split('\n').map((line) => `${pad}  ${line}`)].join('\n')
     }
-    if (value === '' || /[:#{}[\],&*!|>'%@`]/.test(value) || /^\s|\s$/.test(value)) {
+    if (
+      value === '' ||
+      /[:#{}[\],&*!|>'%@`]/.test(value) ||
+      /^\s|\s$/.test(value) ||
+      /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value) ||
+      /^(?:[Tt]rue|[Ff]alse|[Yy]es|[Nn]o|[Oo]n|[Oo]ff|[Nn]ull|~)$/.test(value)
+    ) {
       return `${pad}${JSON.stringify(value)}`
     }
     return `${pad}${value}`
@@ -479,14 +634,69 @@ export async function getPodLogs(
   if (!selected) {
     return { logs: '', container: '', containers: names }
   }
-  const logs = await core.readNamespacedPodLog({
-    name,
+  try {
+    const logs = await core.readNamespacedPodLog({
+      name,
+      namespace,
+      container: selected,
+      timestamps: true,
+      tailLines: 500,
+    })
+    return { logs: logs || '', container: selected, containers: names }
+  } catch {
+    return { logs: '', container: selected, containers: names }
+  }
+}
+
+function eventIso(value?: Date | string): string | undefined {
+  if (!value) return undefined
+  if (value instanceof Date) return value.toISOString()
+  return String(value)
+}
+
+export async function getPodEvents(
+  contextName: string,
+  namespace: string,
+  name: string,
+  uid?: string,
+) {
+  const { core } = getApis(contextName)
+  const selector = [
+    'involvedObject.kind=Pod',
+    `involvedObject.name=${name}`,
+    uid ? `involvedObject.uid=${uid}` : '',
+  ]
+    .filter(Boolean)
+    .join(',')
+  const result = await core.listNamespacedEvent({
     namespace,
-    container: selected,
-    timestamps: true,
-    tailLines: 500,
+    fieldSelector: selector,
   })
-  return { logs: logs || '', container: selected, containers: names }
+  const items = (result.items ?? []).map((ev) => {
+    const last =
+      eventIso(ev.lastTimestamp) ??
+      eventIso(ev.eventTime) ??
+      eventIso(ev.firstTimestamp) ??
+      eventIso(ev.metadata?.creationTimestamp)
+    const first = eventIso(ev.firstTimestamp) ?? eventIso(ev.eventTime)
+    const source = [ev.source?.component, ev.source?.host].filter(Boolean).join(' ')
+    return {
+      uid: ev.metadata?.uid ?? `${ev.reason ?? 'event'}:${last ?? ''}:${ev.message ?? ''}`,
+      type: ev.type ?? 'Normal',
+      reason: ev.reason ?? '—',
+      message: ev.message ?? '',
+      count: ev.count ?? ev.series?.count ?? 1,
+      firstTimestamp: first,
+      lastTimestamp: last,
+      source: source || ev.reportingComponent || '—',
+    }
+  })
+  items.sort((a, b) => {
+    const at = a.lastTimestamp ? Date.parse(a.lastTimestamp) : 0
+    const bt = b.lastTimestamp ? Date.parse(b.lastTimestamp) : 0
+    return bt - at
+  })
+  return items
 }
 
 export function mapDeployment(dep: V1Deployment) {
@@ -592,6 +802,79 @@ export function mapConfigMap(cm: V1ConfigMap) {
   }
 }
 
+function shortAccessModes(modes?: string[]): string {
+  const names: Record<string, string> = {
+    ReadWriteOnce: 'RWO',
+    ReadOnlyMany: 'ROX',
+    ReadWriteMany: 'RWX',
+    ReadWriteOncePod: 'RWOP',
+  }
+  const list = (modes ?? []).map((m) => names[m] ?? m)
+  return list.length ? list.join(', ') : '—'
+}
+
+export function mapPersistentVolume(pv: V1PersistentVolume) {
+  const claim = pv.spec?.claimRef
+  return {
+    kind: 'PersistentVolume' as const,
+    metadata: meta(pv),
+    spec: {
+      capacity: pv.spec?.capacity?.storage ?? '—',
+      accessModes: shortAccessModes(pv.spec?.accessModes),
+      reclaimPolicy: pv.spec?.persistentVolumeReclaimPolicy ?? '—',
+      storageClass: pv.spec?.storageClassName || '—',
+      volumeMode: pv.spec?.volumeMode ?? 'Filesystem',
+      claim: claim?.name
+        ? `${claim.namespace ?? 'default'}/${claim.name}`
+        : '—',
+    },
+    status: {
+      phase: pv.status?.phase ?? 'Unknown',
+    },
+  }
+}
+
+export function mapPersistentVolumeClaim(pvc: V1PersistentVolumeClaim) {
+  return {
+    kind: 'PersistentVolumeClaim' as const,
+    metadata: meta(pvc),
+    spec: {
+      volumeName: pvc.spec?.volumeName || '—',
+      storageClass:
+        pvc.spec?.storageClassName ||
+        pvc.metadata?.annotations?.['volume.beta.kubernetes.io/storage-class'] ||
+        '—',
+      accessModes: shortAccessModes(pvc.spec?.accessModes),
+      volumeMode: pvc.spec?.volumeMode ?? 'Filesystem',
+    },
+    status: {
+      phase: pvc.status?.phase ?? 'Unknown',
+      capacity:
+        pvc.status?.capacity?.storage ||
+        pvc.spec?.resources?.requests?.storage ||
+        '—',
+    },
+  }
+}
+
+export function mapStorageClass(sc: V1StorageClass) {
+  const annotations = sc.metadata?.annotations ?? {}
+  const isDefault =
+    annotations['storageclass.kubernetes.io/is-default-class'] === 'true' ||
+    annotations['storageclass.beta.kubernetes.io/is-default-class'] === 'true'
+  return {
+    kind: 'StorageClass' as const,
+    metadata: meta(sc),
+    spec: {
+      provisioner: sc.provisioner ?? '—',
+      reclaimPolicy: sc.reclaimPolicy ?? 'Delete',
+      volumeBindingMode: sc.volumeBindingMode ?? 'Immediate',
+      allowVolumeExpansion: sc.allowVolumeExpansion ?? false,
+      isDefault,
+    },
+  }
+}
+
 export function mapNode(node: V1Node) {
   const labels = node.metadata?.labels ?? {}
   const roles = Object.keys(labels)
@@ -618,22 +901,38 @@ export function mapNode(node: V1Node) {
 }
 
 export async function fetchSnapshot(contextName: string) {
-  const { kc, core, apps, net, metrics, server, context, clusterName, user, namespace } =
+  const { kc, core, apps, net, storage, metrics, server, context, clusterName, user, namespace } =
     getApis(contextName)
 
-  const [nsRes, podRes, depRes, stsRes, svcRes, ingRes, cmRes, nodeRes, usageMap, version] =
-    await Promise.all([
-      core.listNamespace(),
-      core.listPodForAllNamespaces(),
-      apps.listDeploymentForAllNamespaces(),
-      apps.listStatefulSetForAllNamespaces(),
-      core.listServiceForAllNamespaces(),
-      net.listIngressForAllNamespaces(),
-      core.listConfigMapForAllNamespaces(),
-      core.listNode(),
-      loadPodUsageMap(metrics),
-      readClusterVersion(kc, server),
-    ])
+  const [
+    nsRes,
+    podRes,
+    depRes,
+    stsRes,
+    svcRes,
+    ingRes,
+    cmRes,
+    pvRes,
+    pvcRes,
+    scRes,
+    nodeRes,
+    usageMap,
+    version,
+  ] = await Promise.all([
+    core.listNamespace(),
+    core.listPodForAllNamespaces(),
+    apps.listDeploymentForAllNamespaces(),
+    apps.listStatefulSetForAllNamespaces(),
+    core.listServiceForAllNamespaces(),
+    net.listIngressForAllNamespaces(),
+    core.listConfigMapForAllNamespaces(),
+    core.listPersistentVolume(),
+    core.listPersistentVolumeClaimForAllNamespaces(),
+    storage.listStorageClass(),
+    core.listNode(),
+    loadPodUsageMap(metrics),
+    readClusterVersion(kc, server),
+  ])
 
   const nodes = (nodeRes.items ?? []).map(mapNode)
   const fallbackVersion = nodes.find((n) => n.status.version)?.status.version
@@ -659,6 +958,9 @@ export async function fetchSnapshot(contextName: string) {
     services: (svcRes.items ?? []).map(mapService),
     ingresses: (ingRes.items ?? []).map(mapIngress),
     configMaps: (cmRes.items ?? []).map(mapConfigMap),
+    persistentVolumes: (pvRes.items ?? []).map(mapPersistentVolume),
+    persistentVolumeClaims: (pvcRes.items ?? []).map(mapPersistentVolumeClaim),
+    storageClasses: (scRes.items ?? []).map(mapStorageClass),
     nodes,
   }
 }

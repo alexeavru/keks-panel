@@ -96,8 +96,6 @@ export function StatefulSetsPage() {
       <PageHeader
         title="StatefulSets"
         description="Упорядоченные реплики со стабильными именами и томами"
-        onRefresh={load}
-        refreshing={loading}
         actions={<SearchInput value={query} onChange={setQuery} placeholder="Имя…" />}
       />
       <ResourceTable

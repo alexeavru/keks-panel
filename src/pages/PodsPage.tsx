@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { Trash2 } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
-import { listPods } from '@/lib/k8s-client'
+import { deletePod, listPods } from '@/lib/k8s-client'
 import { formatAge, formatCpuMillis, formatMemoryMi, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
 import { GroupedNumber } from '@/components/GroupedNumber'
 import { PageHeader } from '@/components/PageHeader'
 import { SearchInput } from '@/components/SearchInput'
 import { ResourceTable, type Column } from '@/components/ResourceTable'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { PodDetails } from '@/components/PodDetails'
-import { StatusBadge, phaseTone } from '@/components/StatusBadge'
+import { StatusBadge, podPhaseTone } from '@/components/StatusBadge'
 import { PodsUsageCharts } from '@/components/PodsUsageCharts'
 import type { Pod } from '@/types/k8s'
 
@@ -24,6 +26,9 @@ export function PodsPage() {
   const [selected, setSelected] = useState<Pod | null>(null)
   const [cpuSeries, setCpuSeries] = useState<number[]>([])
   const [memorySeries, setMemorySeries] = useState<number[]>([])
+  const [pendingDelete, setPendingDelete] = useState<Pod | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const lastNs = useRef(ns)
 
   const load = async (silent = false) => {
@@ -41,6 +46,13 @@ export function PodsPage() {
   useEffect(() => {
     setSelected(null)
   }, [location.key, resetAt, ns])
+
+  useEffect(() => {
+    setSelected((prev) => {
+      if (!prev) return prev
+      return items.find((p) => p.metadata.uid === prev.metadata.uid) ?? prev
+    })
+  }, [items])
 
   useEffect(() => {
     void load()
@@ -90,6 +102,27 @@ export function PodsPage() {
     return result
   }, [nsPods, query])
 
+  const closeDelete = useCallback(() => {
+    if (deleting) return
+    setPendingDelete(null)
+    setDeleteError(null)
+  }, [deleting])
+
+  const confirmDelete = useCallback(async () => {
+    if (!connection || !pendingDelete?.metadata.namespace || deleting) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await deletePod(connection, pendingDelete.metadata.namespace, pendingDelete.metadata.name)
+      setItems((prev) => prev.filter((p) => p.metadata.uid !== pendingDelete.metadata.uid))
+      setPendingDelete(null)
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Не удалось удалить под')
+    } finally {
+      setDeleting(false)
+    }
+  }, [connection, pendingDelete, deleting])
+
   const columns: Column<Pod>[] = [
     {
       key: 'name',
@@ -114,7 +147,9 @@ export function PodsPage() {
       key: 'status',
       header: 'Status',
       render: (row) => (
-        <StatusBadge tone={phaseTone(row.status.phase)}>{row.status.phase}</StatusBadge>
+        <StatusBadge tone={podPhaseTone(row.status.state, row.status.ready)}>
+          {row.status.state}
+        </StatusBadge>
       ),
     },
     {
@@ -187,6 +222,27 @@ export function PodsPage() {
         </span>
       ),
     },
+    {
+      key: 'delete',
+      header: '',
+      className: 'w-12 text-right',
+      render: (row) => (
+        <button
+          type="button"
+          className="inline-flex rounded-md p-1.5 text-ink-400 transition hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+          title="Удалить под"
+          aria-label={`Удалить ${row.metadata.name}`}
+          disabled={deleting && pendingDelete?.metadata.uid === row.metadata.uid}
+          onClick={(e) => {
+            e.stopPropagation()
+            setDeleteError(null)
+            setPendingDelete(row)
+          }}
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      ),
+    },
   ]
 
   return (
@@ -198,8 +254,6 @@ export function PodsPage() {
           <PageHeader
             title="Pods"
             description="Запущенные и ожидающие контейнеры"
-            onRefresh={() => void load()}
-            refreshing={loading}
             actions={<SearchInput value={query} onChange={setQuery} placeholder="Имя…" />}
           />
           <PodsUsageCharts
@@ -217,10 +271,36 @@ export function PodsPage() {
             loading={loading}
             onRowClick={setSelected}
             rowClassName={(r) =>
-              r.status.phase === 'Succeeded'
+              r.status.phase === 'Succeeded' || r.status.state === 'Completed' || r.status.state === 'Succeeded'
                 ? 'bg-slate-100/90 text-slate-500 hover:bg-slate-200/60 [&_p]:!text-slate-500 [&_span]:!text-slate-500'
                 : undefined
             }
+          />
+          <ConfirmDialog
+            open={Boolean(pendingDelete)}
+            title="Удалить под?"
+            description={
+              pendingDelete ? (
+                <>
+                  Под{' '}
+                  <span className="font-mono font-medium text-ink-900">{pendingDelete.metadata.name}</span>
+                  {pendingDelete.metadata.namespace ? (
+                    <>
+                      {' '}
+                      из namespace{' '}
+                      <span className="font-mono font-medium text-ink-900">
+                        {pendingDelete.metadata.namespace}
+                      </span>
+                    </>
+                  ) : null}{' '}
+                  будет удалён.
+                </>
+              ) : null
+            }
+            busy={deleting}
+            error={deleteError}
+            onConfirm={() => void confirmDelete()}
+            onCancel={closeDelete}
           />
         </>
       )}

@@ -64,7 +64,7 @@ export function ConnectPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-wash bg-grid">
+    <div className="relative min-h-screen overflow-hidden bg-ink-50 bg-tri-grid">
       <div className="pointer-events-none absolute -left-24 top-20 h-72 w-72 rounded-full bg-leaf-400/20 blur-3xl" />
       <div className="pointer-events-none absolute -right-16 bottom-10 h-80 w-80 rounded-full bg-ember-400/15 blur-3xl" />
 
