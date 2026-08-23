@@ -135,6 +135,25 @@ export interface Deployment {
   }
 }
 
+export interface DeploymentDetail {
+  info: Deployment & {
+    spec: Deployment['spec'] & {
+      strategy?: string
+      minReadySeconds?: number
+      revisionHistoryLimit?: number
+      progressDeadlineSeconds?: number
+    }
+    status: Deployment['status'] & {
+      replicas?: number
+      unavailableReplicas?: number
+      observedGeneration?: number
+    }
+    containers: { name: string; image: string }[]
+    conditions: PodConditionInfo[]
+  }
+  yaml: string
+}
+
 export interface StatefulSet {
   kind: 'StatefulSet'
   metadata: K8sObjectMeta

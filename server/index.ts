@@ -23,6 +23,10 @@ import {
   getPodEvents,
   deletePod,
   applyPodYaml,
+  getDeploymentDetail,
+  applyDeploymentYaml,
+  getDeploymentEvents,
+  listDeploymentPods,
   testContext,
 } from './k8s.js'
 import { handleCallback, logout, me, requireAuth, startLogin } from './auth.js'
@@ -202,6 +206,54 @@ app.get('/api/deployments', async (req, res) => {
     res.json((result.items ?? []).map(mapDeployment))
   } catch (err) {
     sendError(res, err)
+  }
+})
+
+app.get('/api/deployments/:namespace/:name/events', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const uid = typeof req.query.uid === 'string' ? req.query.uid : ''
+    res.json(
+      await getDeploymentEvents(context, req.params.namespace, req.params.name, uid || undefined),
+    )
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/deployments/:namespace/:name/pods', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    res.json(await listDeploymentPods(context, req.params.namespace, req.params.name))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/deployments/:namespace/:name', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    res.json(await getDeploymentDetail(context, req.params.namespace, req.params.name))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.put('/api/deployments/:namespace/:name', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const yaml = typeof req.body?.yaml === 'string' ? req.body.yaml : ''
+    if (!yaml.trim()) {
+      res.status(400).json({ error: 'YAML пустой' })
+      return
+    }
+    res.json(await applyDeploymentYaml(context, req.params.namespace, req.params.name, yaml))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const status = /Некорректный YAML|не совпадает|Ожидался kind|YAML должен|пустой/i.test(message)
+      ? 400
+      : 500
+    sendError(res, err, status)
   }
 })
 

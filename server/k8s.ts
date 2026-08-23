@@ -449,6 +449,55 @@ export async function applyPodYaml(
   return getPodDetail(contextName, namespace, name)
 }
 
+export async function applyDeploymentYaml(
+  contextName: string,
+  namespace: string,
+  name: string,
+  yaml: string,
+) {
+  const { load } = await import('js-yaml')
+  let parsed: unknown
+  try {
+    parsed = coerceYamlTypes(load(yaml))
+  } catch (err) {
+    throw new Error(`Некорректный YAML: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('YAML должен содержать объект Deployment')
+  }
+  const body = parsed as V1Deployment
+  const kind = (body as { kind?: string }).kind
+  if (kind && kind !== 'Deployment') {
+    throw new Error(`Ожидался kind: Deployment, получен ${kind}`)
+  }
+  const metaName = body.metadata?.name
+  const metaNs = body.metadata?.namespace
+  if (metaName && metaName !== name) {
+    throw new Error(`Имя в YAML (${metaName}) не совпадает с deployment ${name}`)
+  }
+  if (metaNs && metaNs !== namespace) {
+    throw new Error(`Namespace в YAML (${metaNs}) не совпадает с ${namespace}`)
+  }
+  body.apiVersion = body.apiVersion || 'apps/v1'
+  body.kind = 'Deployment'
+  body.metadata = {
+    ...body.metadata,
+    name,
+    namespace,
+  }
+  if (body.metadata && 'managedFields' in body.metadata) {
+    delete (body.metadata as { managedFields?: unknown }).managedFields
+  }
+
+  const { apps } = getApis(contextName)
+  try {
+    await apps.replaceNamespacedDeployment({ name, namespace, body })
+  } catch (err) {
+    throw new Error(k8sErrorMessage(err))
+  }
+  return getDeploymentDetail(contextName, namespace, name)
+}
+
 function containerState(status?: V1ContainerStatus): string {
   if (!status?.state) return 'Unknown'
   if (status.state.running) return 'Running'
@@ -562,8 +611,8 @@ function toYaml(value: unknown, indent = 0): string {
   return `${pad}${String(value)}`
 }
 
-function sanitizeManifest(pod: V1Pod): unknown {
-  const raw = JSON.parse(JSON.stringify(pod)) as {
+function sanitizeManifest(obj: unknown): unknown {
+  const raw = JSON.parse(JSON.stringify(obj)) as {
     metadata?: Record<string, unknown>
   }
   if (raw.metadata) delete raw.metadata.managedFields
@@ -700,11 +749,142 @@ export async function getPodEvents(
   return items
 }
 
-export function mapDeployment(dep: V1Deployment) {
-  const matchLabels = dep.spec?.selector?.matchLabels ?? {}
-  const selector = Object.entries(matchLabels)
-    .map(([k, v]) => `${k}=${v}`)
+function labelSelectorString(sel?: {
+  matchLabels?: Record<string, string>
+  matchExpressions?: { key?: string; operator?: string; values?: string[] }[]
+}): string {
+  const parts: string[] = []
+  for (const [k, v] of Object.entries(sel?.matchLabels ?? {})) {
+    parts.push(`${k}=${v}`)
+  }
+  for (const expr of sel?.matchExpressions ?? []) {
+    if (!expr.key || !expr.operator) continue
+    const values = (expr.values ?? []).join(',')
+    if (expr.operator === 'In') parts.push(`${expr.key} in (${values})`)
+    else if (expr.operator === 'NotIn') parts.push(`${expr.key} notin (${values})`)
+    else if (expr.operator === 'Exists') parts.push(expr.key)
+    else if (expr.operator === 'DoesNotExist') parts.push(`!${expr.key}`)
+  }
+  return parts.join(',')
+}
+
+function mapDeploymentDetail(dep: V1Deployment) {
+  const mapped = mapDeployment(dep)
+  const strategy = dep.spec?.strategy
+  let strategyText = strategy?.type ?? 'RollingUpdate'
+  const rolling = strategy?.rollingUpdate
+  if (rolling) {
+    const surge = rolling.maxSurge == null ? '25%' : String(rolling.maxSurge)
+    const unavailable = rolling.maxUnavailable == null ? '25%' : String(rolling.maxUnavailable)
+    strategyText = `RollingUpdate (maxSurge ${surge}, maxUnavailable ${unavailable})`
+  }
+  const template = dep.spec?.template?.spec
+  const containers = [
+    ...(template?.initContainers ?? []).map((c) => ({
+      name: `${c.name} (init)`,
+      image: c.image ?? '',
+    })),
+    ...(template?.containers ?? []).map((c) => ({
+      name: c.name,
+      image: c.image ?? '',
+    })),
+  ]
+  return {
+    ...mapped,
+    spec: {
+      ...mapped.spec,
+      selector: labelSelectorString(dep.spec?.selector) || mapped.spec.selector,
+      strategy: strategyText,
+      minReadySeconds: dep.spec?.minReadySeconds,
+      revisionHistoryLimit: dep.spec?.revisionHistoryLimit,
+      progressDeadlineSeconds: dep.spec?.progressDeadlineSeconds,
+    },
+    status: {
+      ...mapped.status,
+      replicas: dep.status?.replicas ?? 0,
+      unavailableReplicas: dep.status?.unavailableReplicas ?? 0,
+      observedGeneration: dep.status?.observedGeneration,
+    },
+    containers,
+    conditions: (dep.status?.conditions ?? []).map((c) => ({
+      type: c.type ?? '',
+      status: c.status ?? '',
+      reason: c.reason,
+      message: c.message,
+    })),
+  }
+}
+
+export async function getDeploymentDetail(contextName: string, namespace: string, name: string) {
+  const { apps } = getApis(contextName)
+  const dep = await apps.readNamespacedDeployment({ name, namespace })
+  return {
+    info: mapDeploymentDetail(dep),
+    yaml: `${toYaml(sanitizeManifest(dep))}\n`,
+  }
+}
+
+export async function getDeploymentEvents(
+  contextName: string,
+  namespace: string,
+  name: string,
+  uid?: string,
+) {
+  const { core } = getApis(contextName)
+  const selector = [
+    'involvedObject.kind=Deployment',
+    `involvedObject.name=${name}`,
+    uid ? `involvedObject.uid=${uid}` : '',
+  ]
+    .filter(Boolean)
     .join(',')
+  const result = await core.listNamespacedEvent({
+    namespace,
+    fieldSelector: selector,
+  })
+  const items = (result.items ?? []).map((ev) => {
+    const last =
+      eventIso(ev.lastTimestamp) ??
+      eventIso(ev.eventTime) ??
+      eventIso(ev.firstTimestamp) ??
+      eventIso(ev.metadata?.creationTimestamp)
+    const first = eventIso(ev.firstTimestamp) ?? eventIso(ev.eventTime)
+    const source = [ev.source?.component, ev.source?.host].filter(Boolean).join(' ')
+    return {
+      uid: ev.metadata?.uid ?? `${ev.reason ?? 'event'}:${last ?? ''}:${ev.message ?? ''}`,
+      type: ev.type ?? 'Normal',
+      reason: ev.reason ?? '—',
+      message: ev.message ?? '',
+      count: ev.count ?? ev.series?.count ?? 1,
+      firstTimestamp: first,
+      lastTimestamp: last,
+      source: source || ev.reportingComponent || '—',
+    }
+  })
+  items.sort((a, b) => {
+    const at = a.lastTimestamp ? Date.parse(a.lastTimestamp) : 0
+    const bt = b.lastTimestamp ? Date.parse(b.lastTimestamp) : 0
+    return bt - at
+  })
+  return items
+}
+
+export async function listDeploymentPods(contextName: string, namespace: string, name: string) {
+  const { apps, core, metrics } = getApis(contextName)
+  const dep = await apps.readNamespacedDeployment({ name, namespace })
+  const selector = labelSelectorString(dep.spec?.selector)
+  if (!selector) return []
+  const [podRes, usageMap] = await Promise.all([
+    core.listNamespacedPod({ namespace, labelSelector: selector }),
+    loadPodUsageMap(metrics, namespace),
+  ])
+  return (podRes.items ?? []).map((p) =>
+    mapPod(p, usageMap.get(podKey(p.metadata?.namespace, p.metadata?.name))),
+  )
+}
+
+export function mapDeployment(dep: V1Deployment) {
+  const selector = labelSelectorString(dep.spec?.selector)
 
   return {
     kind: 'Deployment' as const,

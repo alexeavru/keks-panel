@@ -1,33 +1,52 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useCluster } from '@/context/ClusterContext'
 import { listDeployments } from '@/lib/k8s-client'
 import { formatAge } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { SearchInput } from '@/components/SearchInput'
 import { ResourceTable, type Column } from '@/components/ResourceTable'
-import { ResourceDrawer } from '@/components/ResourceDrawer'
+import { DeploymentDetails } from '@/components/DeploymentDetails'
 import { StatusBadge } from '@/components/StatusBadge'
 import type { Deployment } from '@/types/k8s'
 
+const POLL_MS = 5000
+
 export function DeploymentsPage() {
   const { connection, namespace: ns } = useCluster()
+  const location = useLocation()
   const [items, setItems] = useState<Deployment[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Deployment | null>(null)
 
-  const load = async () => {
+  const load = async (silent = false) => {
     if (!connection) return
-    setLoading(true)
+    if (!silent) setLoading(true)
     try {
       setItems(await listDeployments(connection))
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
+  const resetAt = (location.state as { reset?: number } | null)?.reset
+
+  useEffect(() => {
+    setSelected(null)
+  }, [location.key, resetAt, ns])
+
+  useEffect(() => {
+    setSelected((prev) => {
+      if (!prev) return prev
+      return items.find((d) => d.metadata.uid === prev.metadata.uid) ?? prev
+    })
+  }, [items])
+
   useEffect(() => {
     void load()
+    const id = window.setInterval(() => void load(true), POLL_MS)
+    return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection])
 
@@ -94,6 +113,10 @@ export function DeploymentsPage() {
     },
   ]
 
+  if (selected) {
+    return <DeploymentDetails deployment={selected} onBack={() => setSelected(null)} />
+  }
+
   return (
     <div>
       <PageHeader
@@ -107,13 +130,6 @@ export function DeploymentsPage() {
         rowKey={(r) => r.metadata.uid}
         loading={loading}
         onRowClick={setSelected}
-      />
-      <ResourceDrawer
-        open={!!selected}
-        title={selected?.metadata.name ?? ''}
-        subtitle={`Deployment · ${selected?.metadata.namespace ?? ''}`}
-        resource={selected}
-        onClose={() => setSelected(null)}
       />
     </div>
   )

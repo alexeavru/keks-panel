@@ -23,9 +23,10 @@ const tabs: { id: Tab; label: string }[] = [
 interface PodDetailsProps {
   pod: Pod
   onBack: () => void
+  backLabel?: string
 }
 
-export function PodDetails({ pod, onBack }: PodDetailsProps) {
+export function PodDetails({ pod, onBack, backLabel = 'Pods' }: PodDetailsProps) {
   const { connection } = useCluster()
   const [tab, setTab] = useState<Tab>('info')
   const [detail, setDetail] = useState<PodDetail | null>(null)
@@ -253,7 +254,7 @@ export function PodDetails({ pod, onBack }: PodDetailsProps) {
           className="text-leaf-600 underline-offset-2 hover:underline"
           onClick={onBack}
         >
-          Pods
+          {backLabel}
         </button>
         <ChevronRight className="h-3.5 w-3.5 text-ink-400" />
         <span>Pod details</span>

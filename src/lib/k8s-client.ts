@@ -16,6 +16,7 @@ import type {
   StatefulSet,
   PodDetail,
   PodEvent,
+  DeploymentDetail,
 } from '@/types/k8s'
 
 export {
@@ -183,6 +184,56 @@ export async function listDeployments(
   namespace?: string,
 ): Promise<Deployment[]> {
   return api(withContext('/api/deployments', connection, namespace), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function fetchDeploymentDetail(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+): Promise<DeploymentDetail> {
+  const path = `/api/deployments/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+  return api(withContext(path, connection), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function saveDeploymentYaml(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+  yaml: string,
+): Promise<DeploymentDetail> {
+  const path = `/api/deployments/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+  return api(withContext(path, connection), {
+    method: 'PUT',
+    headers: contextHeaders(connection),
+    body: JSON.stringify({ yaml }),
+  })
+}
+
+export async function fetchDeploymentEvents(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+  uid?: string,
+): Promise<PodEvent[]> {
+  const path = `/api/deployments/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/events`
+  const url = new URL(withContext(path, connection), window.location.origin)
+  if (uid) url.searchParams.set('uid', uid)
+  return api(url.pathname + url.search, {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listDeploymentPods(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+): Promise<Pod[]> {
+  const path = `/api/deployments/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/pods`
+  return api(withContext(path, connection), {
     headers: contextHeaders(connection),
   })
 }
