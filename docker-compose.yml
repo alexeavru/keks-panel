@@ -10,13 +10,17 @@ services:
       KEKS_API_PORT: "8787"
       KUBECONFIG: /kube/config
       DEX_ISSUER: ${DEX_ISSUER:-https://host.docker.internal:5556/dex}
+      DEX_PUBLIC_URL: ${DEX_PUBLIC_URL:-https://localhost:5556/dex}
+      DEX_API_URL: ${DEX_API_URL:-https://host.docker.internal:5556/dex}
       DEX_CA_FILE: ${DEX_CA_FILE:-/certs/ca.crt}
       DEX_CLIENT_ID: ${DEX_CLIENT_ID:-keks-panel}
       DEX_CLIENT_SECRET: ${DEX_CLIENT_SECRET:-keks-panel-dev}
       DEX_REDIRECT_URI: ${DEX_REDIRECT_URI:-http://localhost:8080/api/auth/callback}
       KEKS_PUBLIC_URL: ${KEKS_PUBLIC_URL:-http://localhost:8080}
       SESSION_SECRET: ${SESSION_SECRET:-keks-dev-session-secret}
+      K8S_API_SERVER: ${K8S_API_SERVER:-}
       K8S_SKIP_TLS_VERIFY: ${K8S_SKIP_TLS_VERIFY:-true}
+      K8S_REWRITE_LOOPBACK: ${K8S_REWRITE_LOOPBACK:-true}
     volumes:
       - ${KUBECONFIG:-${HOME}/.kube/config}:/kube/config:ro
       - ${PWD}/deploy/tls/ca.crt:/certs/ca.crt:ro
@@ -32,5 +36,6 @@ services:
       - "8080:80"
     environment:
       API_UPSTREAM: http://api:8787
+      NGINX_ENVSUBST_FILTER: API_UPSTREAM
     depends_on:
       - api

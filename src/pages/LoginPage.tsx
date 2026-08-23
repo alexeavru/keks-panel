@@ -10,6 +10,17 @@ import type { KubeContextInfo } from '@/types/k8s'
 
 type Method = 'dex' | 'kubeconfig'
 
+function loginErrorMessage(code: string): string {
+  const messages: Record<string, string> = {
+    invalid_state: 'Сессия входа сбросилась. Нажмите «Войти через SSO» ещё раз.',
+    missing_verifier: 'Сессия входа сбросилась. Нажмите «Войти через SSO» ещё раз.',
+    token_exchange_failed: 'Не удалось обменять код SSO на токен. Проверьте, что Dex доступен с API.',
+    userinfo_failed: 'SSO не вернул профиль пользователя.',
+    callback_failed: 'Ошибка callback SSO (TLS или сеть до Dex из контейнера API).',
+  }
+  return messages[code] || `Не удалось войти: ${code}`
+}
+
 export function LoginPage() {
   const { user, loading, applySession, logout } = useAuth()
   const { connect, connecting } = useCluster()
@@ -90,7 +101,7 @@ export function LoginPage() {
         <p className="font-display text-5xl font-extrabold tracking-tight text-ink-900">KEKS</p>
         <h1 className="mt-4 font-display text-2xl font-bold text-ink-800">Вход в панель</h1>
         <p className="mt-3 text-sm leading-relaxed text-ink-600">
-          Войдите через Dex или подключитесь локальным kubeconfig.
+          Войдите через SSO или подключитесь локальным kubeconfig.
         </p>
 
         <div className="surface mt-8 p-6">
@@ -98,7 +109,7 @@ export function LoginPage() {
             {(
               [
                 { id: 'kubeconfig' as const, label: 'Kubeconfig' },
-                { id: 'dex' as const, label: 'Dex' },
+                { id: 'dex' as const, label: 'SSO' },
               ]
             ).map((item) => (
               <button
@@ -123,20 +134,18 @@ export function LoginPage() {
             <div>
               {dexError && (
                 <p className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-500">
-                  Не удалось войти: {dexError}
+                  {loginErrorMessage(dexError)}
                 </p>
               )}
               <p className="mb-4 text-sm leading-relaxed text-ink-600">
-                Авторизация через Dex: Kubernetes проверяет id_token и применяет RBAC пользователя.
+                Авторизация через SSO: Kubernetes проверяет id_token и применяет RBAC пользователя.
               </p>
               <a href="/api/auth/login" className="btn-primary w-full">
                 <KeyRound className="h-4 w-4" />
-                Войти через Dex
+                Войти через SSO
               </a>
               <p className="mt-4 font-mono text-[11px] leading-relaxed text-ink-400">
-                Локально: admin@keks.local / password
-                <br />
-                Dex: https://localhost:5556 (самоподписанный сертификат)
+                SSO: https://localhost:5556 (самоподписанный сертификат)
               </p>
             </div>
           )}

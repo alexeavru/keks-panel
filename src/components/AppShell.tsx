@@ -51,7 +51,10 @@ const STORAGE_KEY = 'keks.nav.storage'
 function clusterConnectMessage(error: string | null): string | null {
   if (!error) return null
   if (/HTTP-Code:\s*401|\bUnauthorized\b|oidc_reauth|не принял OIDC|истёк|Нет OIDC/i.test(error)) {
-    return 'Кластер не принял OIDC-токен. Выйдите и войдите через Dex снова.'
+    return 'Кластер не принял OIDC-токен. Выйдите и войдите через SSO снова.'
+  }
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|connect ECONN/i.test(error)) {
+    return 'Панель в Docker не достучалась до Kubernetes API. Адрес 127.0.0.1 из kubeconfig указывает на сам контейнер, а не на kind. Пересоберите compose или задайте K8S_API_SERVER=https://host.docker.internal:<порт kind>.'
   }
   return error
 }
@@ -206,7 +209,7 @@ export function AppShell() {
             </p>
             {error ? (
               <button type="button" className="btn-primary mx-auto" onClick={() => void handleDexReauth()}>
-                Войти через Dex снова
+                Войти через SSO снова
               </button>
             ) : null}
           </div>

@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import https from 'node:https'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,7 +10,8 @@ const defaultDexCa = join(dirname(fileURLToPath(import.meta.url)), '../deploy/tl
 
 function dexFetch(url: string, init?: RequestInit): Promise<Response> {
   const caFile = env('DEX_CA_FILE', defaultDexCa)
-  if (!existsSync(caFile)) return fetch(url, init)
+  const caOk = existsSync(caFile) && statSync(caFile).isFile()
+  if (!caOk) return fetch(url, init)
 
   const ca = readFileSync(caFile)
   const parsed = new URL(url)
@@ -92,11 +93,14 @@ function env(name: string, fallback: string): string {
 
 export function dexConfig() {
   const issuer = env('DEX_ISSUER', 'https://host.docker.internal:5556/dex').replace(/\/$/, '')
-  // На macOS host.docker.internal часто нет в DNS; браузер и локальный API ходят на localhost.
+  // На macOS host.docker.internal часто нет в DNS; браузер ходит на localhost.
   const publicBase = env('DEX_PUBLIC_URL', 'https://localhost:5556/dex').replace(/\/$/, '')
+  // Из Docker API ходит на Dex через host.docker.internal; иначе совпадает с publicBase.
+  const apiBase = env('DEX_API_URL', publicBase).replace(/\/$/, '')
   return {
     issuer,
     publicBase,
+    apiBase,
     clientId: env('DEX_CLIENT_ID', 'keks-panel'),
     clientSecret: env('DEX_CLIENT_SECRET', 'keks-panel-dev'),
     redirectUri: env('DEX_REDIRECT_URI', 'http://localhost:5173/api/auth/callback'),
@@ -213,7 +217,7 @@ function jwtKid(token: string): string {
 }
 
 async function dexSigningKids(): Promise<string[]> {
-  const res = await dexFetch(`${dexConfig().publicBase}/keys`)
+  const res = await dexFetch(`${dexConfig().apiBase}/keys`)
   const json = (await res.json().catch(() => ({}))) as { keys?: { kid?: string }[] }
   if (!res.ok) return []
   return (json.keys ?? []).map((key) => key.kid).filter((kid): kid is string => Boolean(kid))
@@ -242,7 +246,7 @@ function clearOidcCookies(): string[] {
 
 async function refreshOidc(refreshToken: string): Promise<OidcTokens> {
   const cfg = dexConfig()
-  const tokenRes = await dexFetch(`${cfg.publicBase}/token`, {
+  const tokenRes = await dexFetch(`${cfg.apiBase}/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -310,6 +314,23 @@ function pkce(verifier: string): string {
   return b64url(createHash('sha256').update(verifier).digest())
 }
 
+const oauthByState = new Map<string, { verifier: string; exp: number }>()
+
+function putOauth(state: string, verifier: string) {
+  const now = Date.now()
+  for (const [key, row] of oauthByState) {
+    if (row.exp < now) oauthByState.delete(key)
+  }
+  oauthByState.set(state, { verifier, exp: now + 10 * 60 * 1000 })
+}
+
+function takeOauth(state: string): string | undefined {
+  const row = oauthByState.get(state)
+  oauthByState.delete(state)
+  if (!row || row.exp < Date.now()) return undefined
+  return row.verifier
+}
+
 export function startLogin(_req: Request, res: Response) {
   const cfg = dexConfig()
   const state = b64url(randomBytes(24))
@@ -325,6 +346,7 @@ export function startLogin(_req: Request, res: Response) {
     code_challenge: pkce(verifier),
     code_challenge_method: 'S256',
   })
+  putOauth(state, verifier)
   res.setHeader('Set-Cookie', [
     cookie(STATE_COOKIE, state, 600),
     cookie(VERIFIER_COOKIE, verifier, 600),
@@ -344,14 +366,9 @@ export async function handleCallback(req: Request, res: Response) {
     res.redirect(302, `${cfg.frontendOrigin}/login?error=${encodeURIComponent(error)}`)
     return
   }
-  if (!code || !state || state !== cookies[STATE_COOKIE]) {
-    res.redirect(302, `${cfg.frontendOrigin}/login?error=invalid_state`)
-    return
-  }
-
-  const verifier = cookies[VERIFIER_COOKIE]
-  if (!verifier) {
-    res.redirect(302, `${cfg.frontendOrigin}/login?error=missing_verifier`)
+  const verifier = (state && takeOauth(state)) || (state && state === cookies[STATE_COOKIE] ? cookies[VERIFIER_COOKIE] : undefined)
+  if (!code || !state || !verifier) {
+    res.redirect(302, `${cfg.frontendOrigin}/login?error=${encodeURIComponent(!code || !state ? 'invalid_state' : 'missing_verifier')}`)
     return
   }
 
@@ -364,7 +381,7 @@ export async function handleCallback(req: Request, res: Response) {
     code_verifier: verifier,
   })
 
-  const tokenRes = await dexFetch(`${cfg.publicBase}/token`, {
+  const tokenRes = await dexFetch(`${cfg.apiBase}/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
@@ -382,7 +399,7 @@ export async function handleCallback(req: Request, res: Response) {
     return
   }
 
-  const infoRes = await dexFetch(`${cfg.publicBase}/userinfo`, {
+  const infoRes = await dexFetch(`${cfg.apiBase}/userinfo`, {
     headers: { Authorization: `Bearer ${tokenJson.access_token || tokenJson.id_token}` },
   })
   const info = (await infoRes.json().catch(() => ({}))) as {

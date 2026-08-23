@@ -21,6 +21,7 @@ import {
   type V1PersistentVolumeClaim,
   type V1StorageClass,
 } from '@kubernetes/client-node'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import https from 'node:https'
@@ -39,6 +40,27 @@ export function kubeconfigPath(): string {
   return process.env.KUBECONFIG?.split(':')[0] || join(homedir(), '.kube', 'config')
 }
 
+function rewriteLoopback(): boolean {
+  const flag = process.env.K8S_REWRITE_LOOPBACK?.trim()
+  if (flag === '0' || flag === 'false') return false
+  if (flag === '1' || flag === 'true') return true
+  return existsSync('/.dockerenv')
+}
+
+function rewriteKubeServer(server: string): string {
+  if (!rewriteLoopback()) return server
+  try {
+    const url = new URL(server)
+    if (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1') {
+      url.hostname = process.env.K8S_DOCKER_HOST?.trim() || 'host.docker.internal'
+      return url.toString().replace(/\/$/, '')
+    }
+  } catch {
+    return server
+  }
+  return server
+}
+
 export function loadKubeConfig(): KubeConfig {
   const kc = new KubeConfig()
   const path = kubeconfigPath()
@@ -47,6 +69,17 @@ export function loadKubeConfig(): KubeConfig {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`Не удалось прочитать kubeconfig (${path}): ${message}`)
+  }
+  if (rewriteLoopback()) {
+    for (const cluster of kc.clusters) {
+      if (!cluster.server) continue
+      const next = rewriteKubeServer(cluster.server)
+      if (next !== cluster.server) {
+        console.log(`kubeconfig ${cluster.name}: ${cluster.server} → ${next}`)
+        cluster.server = next
+        cluster.skipTLSVerify = true
+      }
+    }
   }
   return kc
 }
@@ -106,7 +139,7 @@ function oidcClusterEndpoint(): {
     process.env.K8S_SKIP_TLS_VERIFY === 'true' || process.env.K8S_SKIP_TLS_VERIFY === '1'
 
   if (server) {
-    return { server, skipTLSVerify: skip, caData, caFile, name: 'oidc' }
+    return { server: rewriteKubeServer(server), skipTLSVerify: skip || rewriteLoopback(), caData, caFile, name: 'oidc' }
   }
 
   const kc = loadKubeConfig()
@@ -117,8 +150,8 @@ function oidcClusterEndpoint(): {
     )
   }
   return {
-    server: cluster.server,
-    skipTLSVerify: skip || Boolean(cluster.skipTLSVerify),
+    server: rewriteKubeServer(cluster.server),
+    skipTLSVerify: skip || rewriteLoopback() || Boolean(cluster.skipTLSVerify),
     caData: cluster.caData,
     caFile: cluster.caFile,
     name: cluster.name,

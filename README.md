@@ -49,7 +49,8 @@ chmod +x deploy/kind-up.sh deploy/gen-oidc-certs.sh
 | `KUBECONFIG` | Путь к kubeconfig (режим kubeconfig и fallback адреса API) |
 | `KEKS_API_PORT` | Порт API (по умолчанию `8787`) |
 | `DEX_ISSUER` | Issuer в токенах / kube-apiserver (по умолчанию `https://host.docker.internal:5556/dex`) |
-| `DEX_PUBLIC_URL` | URL Dex для браузера и локального API (по умолчанию `https://localhost:5556/dex`) |
+| `DEX_PUBLIC_URL` | URL Dex для браузера (по умолчанию `https://localhost:5556/dex`) |
+| `DEX_API_URL` | URL Dex для серверных запросов панели (по умолчанию как `DEX_PUBLIC_URL`; в Docker — `https://host.docker.internal:5556/dex`) |
 | `DEX_CA_FILE` | CA Dex для API (по умолчанию `deploy/tls/ca.crt`) |
 | `DEX_CLIENT_ID` / `DEX_CLIENT_SECRET` | OAuth-клиент панели |
 | `DEX_REDIRECT_URI` | Callback (`http://localhost:5173/api/auth/callback`) |
