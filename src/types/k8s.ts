@@ -12,7 +12,7 @@ export type ResourceKind =
   | 'StorageClass'
   | 'Node'
 
-export type ConnectionMode = 'kubeconfig' | 'live'
+export type ConnectionMode = 'kubeconfig' | 'live' | 'oidc'
 
 export interface KubeContextInfo {
   name: string

@@ -151,7 +151,7 @@ function NavGroup({
 }
 
 export function AppShell() {
-  const { connection, disconnect, namespace, setNamespace } = useCluster()
+  const { connection, connecting, error, disconnect, namespace, setNamespace } = useCluster()
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [namespaces, setNamespaces] = useState<string[]>([])
@@ -176,12 +176,16 @@ export function AppShell() {
   }, [connection])
 
   if (!connection) {
+    if (user?.provider === 'dex' || connecting) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-ink-50 bg-tri-grid">
+          <p className="font-mono text-sm text-ink-500">
+            {error || 'Подключение к кластеру по токену Dex…'}
+          </p>
+        </div>
+      )
+    }
     return <Navigate to="/connect" replace />
-  }
-
-  const handleDisconnect = () => {
-    disconnect()
-    navigate('/connect')
   }
 
   const handleLogout = async () => {
@@ -222,7 +226,7 @@ export function AppShell() {
               KEKS
             </p>
             <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">
-              panel · 0.3.3
+              panel · 0.4.0
             </p>
           </div>
 
@@ -285,7 +289,11 @@ export function AppShell() {
               <div className="mb-1 flex items-center gap-1.5 text-ink-500">
                 <Cable className="h-3.5 w-3.5" />
                 <span className="font-mono text-[10px] uppercase tracking-[0.12em]">
-                  {connection.mode === 'kubeconfig' ? 'kubeconfig' : 'live'}
+                  {connection.mode === 'oidc'
+                    ? 'oidc / rbac'
+                    : connection.mode === 'kubeconfig'
+                      ? 'kubeconfig'
+                      : 'live'}
                 </span>
               </div>
               <p className="truncate text-sm font-semibold text-ink-900">{connection.name}</p>
@@ -293,12 +301,9 @@ export function AppShell() {
                 {connection.host ? shortHost(connection.host) : connection.context ?? '—'}
               </p>
             </div>
-            <button type="button" className="btn-ghost w-full justify-start" onClick={handleDisconnect}>
-              <LogOut className="h-4 w-4" />
-              Отключиться
-            </button>
             <button type="button" className="btn-ghost w-full justify-start" onClick={() => void handleLogout()}>
-              Выйти из Dex
+              <LogOut className="h-4 w-4" />
+              Выйти
             </button>
           </div>
         </aside>

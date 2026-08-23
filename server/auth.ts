@@ -1,14 +1,86 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import https from 'node:https'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Request, Response, NextFunction } from 'express'
+import { testContext } from './k8s.js'
+
+const defaultDexCa = join(dirname(fileURLToPath(import.meta.url)), '../deploy/tls/ca.crt')
+
+function dexFetch(url: string, init?: RequestInit): Promise<Response> {
+  const caFile = env('DEX_CA_FILE', defaultDexCa)
+  if (!existsSync(caFile)) return fetch(url, init)
+
+  const ca = readFileSync(caFile)
+  const parsed = new URL(url)
+  const body =
+    init?.body == null
+      ? undefined
+      : typeof init.body === 'string'
+        ? init.body
+        : String(init.body)
+  const headers: Record<string, string> = {}
+  if (init?.headers) {
+    const raw = init.headers
+    if (raw instanceof Headers) {
+      raw.forEach((value, key) => {
+        headers[key] = value
+      })
+    } else if (Array.isArray(raw)) {
+      for (const [key, value] of raw) headers[key] = value
+    } else {
+      for (const [key, value] of Object.entries(raw)) {
+        if (typeof value === 'string') headers[key] = value
+      }
+    }
+  }
+  if (body && !headers['Content-Length'] && !headers['content-length']) {
+    headers['Content-Length'] = String(Buffer.byteLength(body))
+  }
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port || 443,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: init?.method || 'GET',
+        headers,
+        ca,
+        servername: parsed.hostname,
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk) => chunks.push(chunk as Buffer))
+        res.on('end', () => {
+          resolve(
+            new Response(Buffer.concat(chunks), {
+              status: res.statusCode || 500,
+              headers: res.headers as HeadersInit,
+            }),
+          )
+        })
+      },
+    )
+    req.on('error', reject)
+    if (body) req.write(body)
+    req.end()
+  })
+}
+
+export type AuthProvider = 'dex' | 'kubeconfig'
 
 export interface AuthUser {
   sub: string
   email: string
   name: string
   exp: number
+  provider?: AuthProvider
 }
 
 const SESSION_COOKIE = 'keks.sid'
+const OIDC_COOKIE = 'keks.oidc'
 const STATE_COOKIE = 'keks.oauth.state'
 const VERIFIER_COOKIE = 'keks.oauth.verifier'
 const SESSION_TTL_SEC = 8 * 60 * 60
@@ -18,9 +90,12 @@ function env(name: string, fallback: string): string {
 }
 
 export function dexConfig() {
-  const issuer = env('DEX_ISSUER', 'http://127.0.0.1:5556/dex').replace(/\/$/, '')
+  const issuer = env('DEX_ISSUER', 'https://host.docker.internal:5556/dex').replace(/\/$/, '')
+  // На macOS host.docker.internal часто нет в DNS; браузер и локальный API ходят на localhost.
+  const publicBase = env('DEX_PUBLIC_URL', 'https://localhost:5556/dex').replace(/\/$/, '')
   return {
     issuer,
+    publicBase,
     clientId: env('DEX_CLIENT_ID', 'keks-panel'),
     clientSecret: env('DEX_CLIENT_SECRET', 'keks-panel-dev'),
     redirectUri: env('DEX_REDIRECT_URI', 'http://localhost:5173/api/auth/callback'),
@@ -102,6 +177,91 @@ export function readUser(req: Request): AuthUser | null {
   return readUserFromCookieHeader(req.headers.cookie)
 }
 
+function appendCookie(res: Response, value: string) {
+  const prev = res.getHeader('Set-Cookie')
+  const list = !prev ? [] : Array.isArray(prev) ? prev.map(String) : [String(prev)]
+  list.push(value)
+  res.setHeader('Set-Cookie', list)
+}
+
+interface OidcTokens {
+  idToken: string
+  refreshToken?: string
+}
+
+function jwtExp(token: string): number {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as {
+      exp?: number
+    }
+    return payload.exp ?? 0
+  } catch {
+    return 0
+  }
+}
+
+function readOidcTokensFromHeader(cookieHeader?: string | string[]): OidcTokens | null {
+  const header = Array.isArray(cookieHeader) ? cookieHeader.join('; ') : cookieHeader
+  const raw = parseCookies(header)[OIDC_COOKIE]
+  if (!raw) return null
+  const json = unsign(raw, dexConfig().sessionSecret)
+  if (!json) return null
+  try {
+    const tokens = JSON.parse(json) as OidcTokens
+    return tokens.idToken ? tokens : null
+  } catch {
+    return null
+  }
+}
+
+function oidcCookieValue(tokens: OidcTokens): string {
+  return cookie(OIDC_COOKIE, sign(JSON.stringify(tokens), dexConfig().sessionSecret), SESSION_TTL_SEC)
+}
+
+async function refreshOidc(refreshToken: string): Promise<OidcTokens> {
+  const cfg = dexConfig()
+  const tokenRes = await dexFetch(`${cfg.publicBase}/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+    }),
+  })
+  const json = (await tokenRes.json().catch(() => ({}))) as {
+    id_token?: string
+    refresh_token?: string
+    error?: string
+    error_description?: string
+  }
+  if (!tokenRes.ok || !json.id_token) {
+    throw new Error(json.error_description || json.error || 'Не удалось обновить OIDC-токен')
+  }
+  return { idToken: json.id_token, refreshToken: json.refresh_token || refreshToken }
+}
+
+export async function ensureOidcToken(req: Request, res: Response): Promise<string> {
+  const tokens = readOidcTokensFromHeader(req.headers.cookie)
+  if (!tokens?.idToken) {
+    throw new Error('Нет OIDC-токена. Войдите через Dex')
+  }
+  const exp = jwtExp(tokens.idToken)
+  const now = Math.floor(Date.now() / 1000)
+  if (exp - now > 45) return tokens.idToken
+  if (!tokens.refreshToken) {
+    throw new Error('OIDC-токен истёк. Войдите через Dex снова')
+  }
+  const next = await refreshOidc(tokens.refreshToken)
+  appendCookie(res, oidcCookieValue(next))
+  return next.idToken
+}
+
+export function readOidcIdTokenFromCookieHeader(cookieHeader?: string | string[]): string | null {
+  return readOidcTokensFromHeader(cookieHeader)?.idToken ?? null
+}
+
 function pkce(verifier: string): string {
   return b64url(createHash('sha256').update(verifier).digest())
 }
@@ -115,7 +275,7 @@ export function startLogin(_req: Request, res: Response) {
     client_id: cfg.clientId,
     redirect_uri: cfg.redirectUri,
     response_type: 'code',
-    scope: 'openid email profile groups',
+    scope: 'openid email profile groups offline_access',
     state,
     nonce,
     code_challenge: pkce(verifier),
@@ -125,7 +285,7 @@ export function startLogin(_req: Request, res: Response) {
     cookie(STATE_COOKIE, state, 600),
     cookie(VERIFIER_COOKIE, verifier, 600),
   ])
-  res.redirect(302, `${cfg.issuer}/auth?${params.toString()}`)
+  res.redirect(302, `${cfg.publicBase}/auth?${params.toString()}`)
 }
 
 export async function handleCallback(req: Request, res: Response) {
@@ -160,7 +320,7 @@ export async function handleCallback(req: Request, res: Response) {
     code_verifier: verifier,
   })
 
-  const tokenRes = await fetch(`${cfg.issuer}/token`, {
+  const tokenRes = await dexFetch(`${cfg.publicBase}/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
@@ -168,17 +328,18 @@ export async function handleCallback(req: Request, res: Response) {
   const tokenJson = (await tokenRes.json().catch(() => ({}))) as {
     access_token?: string
     id_token?: string
+    refresh_token?: string
     error?: string
     error_description?: string
   }
-  if (!tokenRes.ok || !tokenJson.access_token) {
+  if (!tokenRes.ok || !tokenJson.id_token) {
     const msg = tokenJson.error_description || tokenJson.error || 'token_exchange_failed'
     res.redirect(302, `${cfg.frontendOrigin}/login?error=${encodeURIComponent(msg)}`)
     return
   }
 
-  const infoRes = await fetch(`${cfg.issuer}/userinfo`, {
-    headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+  const infoRes = await dexFetch(`${cfg.publicBase}/userinfo`, {
+    headers: { Authorization: `Bearer ${tokenJson.access_token || tokenJson.id_token}` },
   })
   const info = (await infoRes.json().catch(() => ({}))) as {
     sub?: string
@@ -196,38 +357,91 @@ export async function handleCallback(req: Request, res: Response) {
     email: info.email || '',
     name: info.name || info.preferred_username || info.email || info.sub,
     exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SEC,
+    provider: 'dex',
   }
 
   res.setHeader('Set-Cookie', [
     cookie(SESSION_COOKIE, sign(JSON.stringify(user), cfg.sessionSecret), SESSION_TTL_SEC),
+    oidcCookieValue({ idToken: tokenJson.id_token, refreshToken: tokenJson.refresh_token }),
     clearCookie(STATE_COOKIE),
     clearCookie(VERIFIER_COOKIE),
   ])
-  res.redirect(302, `${cfg.frontendOrigin}/connect`)
-  } catch {
+  res.redirect(302, `${cfg.frontendOrigin}/cluster`)
+  } catch (err) {
+    console.error('dex callback failed', err)
     res.redirect(302, `${cfg.frontendOrigin}/login?error=callback_failed`)
   }
 }
 
 export function logout(_req: Request, res: Response) {
-  res.setHeader('Set-Cookie', [clearCookie(SESSION_COOKIE)])
+  res.setHeader('Set-Cookie', [clearCookie(SESSION_COOKIE), clearCookie(OIDC_COOKIE)])
   res.json({ ok: true })
 }
 
 export function me(req: Request, res: Response) {
   const user = readUser(req)
   if (!user) {
-    res.status(401).json({ error: 'Требуется вход через Dex' })
+    res.status(401).json({ error: 'Требуется вход' })
     return
   }
-  res.json({ user: { sub: user.sub, email: user.email, name: user.name } })
+  res.json({
+    user: {
+      sub: user.sub,
+      email: user.email,
+      name: user.name,
+      provider: user.provider ?? 'dex',
+    },
+  })
+}
+
+export function publicUser(user: AuthUser) {
+  return {
+    sub: user.sub,
+    email: user.email,
+    name: user.name,
+    provider: user.provider ?? 'dex',
+  }
+}
+
+export function writeSessionCookie(res: Response, user: AuthUser) {
+  res.setHeader('Set-Cookie', [
+    cookie(SESSION_COOKIE, sign(JSON.stringify(user), dexConfig().sessionSecret), SESSION_TTL_SEC),
+    clearCookie(OIDC_COOKIE),
+  ])
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const user = readUser(req)
   if (!user) {
-    res.status(401).json({ error: 'Требуется вход через Dex' })
+    res.status(401).json({ error: 'Требуется вход' })
     return
   }
   next()
+}
+
+export async function loginWithKubeconfig(req: Request, res: Response) {
+  const context = typeof req.body?.context === 'string' ? req.body.context.trim() : ''
+  if (!context) {
+    res.status(400).json({ error: 'Укажите context' })
+    return
+  }
+  try {
+    const result = await testContext(context)
+    const user: AuthUser = {
+      sub: `kubeconfig:${result.context}`,
+      email: '',
+      name: result.context,
+      exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SEC,
+      provider: 'kubeconfig',
+    }
+    writeSessionCookie(res, user)
+    res.json({
+      user: publicUser(user),
+      context: result.context,
+      server: result.server,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    res.status(400).json({ error: message })
+  }
 }

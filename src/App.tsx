@@ -31,6 +31,9 @@ function RootRedirect() {
   if (!user) {
     return <Navigate to="/login" replace />
   }
+  if (user.provider === 'dex') {
+    return <Navigate to="/cluster" replace />
+  }
   return <Navigate to={loadConnection() ? '/cluster' : '/connect'} replace />
 }
 

@@ -73,7 +73,75 @@ export function listContexts(): { path: string; contexts: KubeContextInfo[] } {
   return { path: kubeconfigPath(), contexts }
 }
 
-export function getApis(contextName: string): {
+export type K8sAuth =
+  | { type: 'kubeconfig'; context: string }
+  | { type: 'oidc'; token: string }
+
+function jwtPayload(token: string): { email?: string; name?: string; sub?: string; groups?: string[] } {
+  try {
+    const part = token.split('.')[1]
+    if (!part) return {}
+    return JSON.parse(Buffer.from(part, 'base64url').toString('utf8')) as {
+      email?: string
+      name?: string
+      sub?: string
+      groups?: string[]
+    }
+  } catch {
+    return {}
+  }
+}
+
+function oidcClusterEndpoint(): {
+  server: string
+  skipTLSVerify: boolean
+  caData?: string
+  caFile?: string
+  name: string
+} {
+  const server = process.env.K8S_API_SERVER?.trim()
+  const caFile = process.env.K8S_CA_FILE?.trim()
+  const caData = process.env.K8S_CA_DATA?.trim()
+  const skip =
+    process.env.K8S_SKIP_TLS_VERIFY === 'true' || process.env.K8S_SKIP_TLS_VERIFY === '1'
+
+  if (server) {
+    return { server, skipTLSVerify: skip, caData, caFile, name: 'oidc' }
+  }
+
+  const kc = loadKubeConfig()
+  const cluster = kc.getCurrentCluster()
+  if (!cluster?.server) {
+    throw new Error(
+      'Для Dex задайте K8S_API_SERVER (или kubeconfig с cluster.server только для адреса API)',
+    )
+  }
+  return {
+    server: cluster.server,
+    skipTLSVerify: skip || Boolean(cluster.skipTLSVerify),
+    caData: cluster.caData,
+    caFile: cluster.caFile,
+    name: cluster.name,
+  }
+}
+
+function clientsFromKubeConfig(kc: KubeConfig, server: string, context: string, clusterName: string, user: string, namespace?: string) {
+  return {
+    kc,
+    core: kc.makeApiClient(CoreV1Api),
+    apps: kc.makeApiClient(AppsV1Api),
+    net: kc.makeApiClient(NetworkingV1Api),
+    storage: kc.makeApiClient(StorageV1Api),
+    metrics: new Metrics(kc),
+    server,
+    context,
+    clusterName,
+    user,
+    namespace,
+  }
+}
+
+export function getApis(auth: K8sAuth | string): {
   kc: KubeConfig
   core: CoreV1Api
   apps: AppsV1Api
@@ -86,6 +154,38 @@ export function getApis(contextName: string): {
   user: string
   namespace?: string
 } {
+  if (typeof auth === 'string') {
+    auth = { type: 'kubeconfig', context: auth }
+  }
+
+  if (auth.type === 'oidc') {
+    const endpoint = oidcClusterEndpoint()
+    const claims = jwtPayload(auth.token)
+    const kc = new KubeConfig()
+    kc.loadFromOptions({
+      clusters: [
+        {
+          name: endpoint.name,
+          server: endpoint.server,
+          skipTLSVerify: endpoint.skipTLSVerify,
+          caData: endpoint.caData,
+          caFile: endpoint.caFile,
+        },
+      ],
+      users: [{ name: 'oidc', token: auth.token }],
+      contexts: [{ name: 'oidc', cluster: endpoint.name, user: 'oidc' }],
+      currentContext: 'oidc',
+    })
+    return clientsFromKubeConfig(
+      kc,
+      endpoint.server,
+      'oidc',
+      endpoint.name,
+      claims.email || claims.name || claims.sub || 'oidc',
+    )
+  }
+
+  const contextName = auth.context
   const kc = loadKubeConfig()
   const ctx = kc.contexts.find((c) => c.name === contextName)
   if (!ctx) {
@@ -98,19 +198,14 @@ export function getApis(contextName: string): {
     throw new Error(`У контекста «${contextName}» нет server URL`)
   }
 
-  return {
+  return clientsFromKubeConfig(
     kc,
-    core: kc.makeApiClient(CoreV1Api),
-    apps: kc.makeApiClient(AppsV1Api),
-    net: kc.makeApiClient(NetworkingV1Api),
-    storage: kc.makeApiClient(StorageV1Api),
-    metrics: new Metrics(kc),
-    server: cluster.server,
-    context: contextName,
-    clusterName: cluster.name,
-    user: kc.getCurrentUser()?.name ?? ctx.user,
-    namespace: ctx.namespace,
-  }
+    cluster.server,
+    contextName,
+    cluster.name,
+    kc.getCurrentUser()?.name ?? ctx.user,
+    ctx.namespace,
+  )
 }
 
 async function readClusterVersion(
@@ -334,8 +429,8 @@ async function loadPodUsageMap(metrics: Metrics, namespace?: string) {
   }
 }
 
-export async function listMappedPods(contextName: string, namespace?: string) {
-  const { core, metrics } = getApis(contextName)
+export async function listMappedPods(auth: K8sAuth | string, namespace?: string) {
+  const { core, metrics } = getApis(auth)
   const [podRes, usageMap] = await Promise.all([
     namespace
       ? core.listNamespacedPod({ namespace })
@@ -347,8 +442,8 @@ export async function listMappedPods(contextName: string, namespace?: string) {
   )
 }
 
-export async function deletePod(contextName: string, namespace: string, name: string) {
-  const { core } = getApis(contextName)
+export async function deletePod(auth: K8sAuth | string, namespace: string, name: string) {
+  const { core } = getApis(auth)
   await core.deleteNamespacedPod({ name, namespace })
 }
 
@@ -401,7 +496,7 @@ function coerceYamlTypes(value: unknown, key?: string): unknown {
 }
 
 export async function applyPodYaml(
-  contextName: string,
+  auth: K8sAuth | string,
   namespace: string,
   name: string,
   yaml: string,
@@ -440,17 +535,17 @@ export async function applyPodYaml(
     delete (body.metadata as { managedFields?: unknown }).managedFields
   }
 
-  const { core } = getApis(contextName)
+  const { core } = getApis(auth)
   try {
     await core.replaceNamespacedPod({ name, namespace, body })
   } catch (err) {
     throw new Error(k8sErrorMessage(err))
   }
-  return getPodDetail(contextName, namespace, name)
+  return getPodDetail(auth, namespace, name)
 }
 
 export async function applyDeploymentYaml(
-  contextName: string,
+  auth: K8sAuth | string,
   namespace: string,
   name: string,
   yaml: string,
@@ -489,13 +584,13 @@ export async function applyDeploymentYaml(
     delete (body.metadata as { managedFields?: unknown }).managedFields
   }
 
-  const { apps } = getApis(contextName)
+  const { apps } = getApis(auth)
   try {
     await apps.replaceNamespacedDeployment({ name, namespace, body })
   } catch (err) {
     throw new Error(k8sErrorMessage(err))
   }
-  return getDeploymentDetail(contextName, namespace, name)
+  return getDeploymentDetail(auth, namespace, name)
 }
 
 function containerState(status?: V1ContainerStatus): string {
@@ -619,8 +714,8 @@ function sanitizeManifest(obj: unknown): unknown {
   return raw
 }
 
-export async function getPodDetail(contextName: string, namespace: string, name: string) {
-  const { core, metrics } = getApis(contextName)
+export async function getPodDetail(auth: K8sAuth | string, namespace: string, name: string) {
+  const { core, metrics } = getApis(auth)
   const pod = await core.readNamespacedPod({ name, namespace })
   const usageMap = await loadPodUsageMap(metrics, namespace)
   const mapped = mapPod(pod, usageMap.get(podKey(namespace, name)))
@@ -669,12 +764,12 @@ export async function getPodDetail(contextName: string, namespace: string, name:
 }
 
 export async function getPodLogs(
-  contextName: string,
+  auth: K8sAuth | string,
   namespace: string,
   name: string,
   container?: string,
 ) {
-  const { core } = getApis(contextName)
+  const { core } = getApis(auth)
   const pod = await core.readNamespacedPod({ name, namespace })
   const names = [
     ...(pod.spec?.initContainers ?? []).map((c) => c.name),
@@ -705,12 +800,12 @@ function eventIso(value?: Date | string): string | undefined {
 }
 
 export async function getPodEvents(
-  contextName: string,
+  auth: K8sAuth | string,
   namespace: string,
   name: string,
   uid?: string,
 ) {
-  const { core } = getApis(contextName)
+  const { core } = getApis(auth)
   const selector = [
     'involvedObject.kind=Pod',
     `involvedObject.name=${name}`,
@@ -815,8 +910,8 @@ function mapDeploymentDetail(dep: V1Deployment) {
   }
 }
 
-export async function getDeploymentDetail(contextName: string, namespace: string, name: string) {
-  const { apps } = getApis(contextName)
+export async function getDeploymentDetail(auth: K8sAuth | string, namespace: string, name: string) {
+  const { apps } = getApis(auth)
   const dep = await apps.readNamespacedDeployment({ name, namespace })
   return {
     info: mapDeploymentDetail(dep),
@@ -825,12 +920,12 @@ export async function getDeploymentDetail(contextName: string, namespace: string
 }
 
 export async function getDeploymentEvents(
-  contextName: string,
+  auth: K8sAuth | string,
   namespace: string,
   name: string,
   uid?: string,
 ) {
-  const { core } = getApis(contextName)
+  const { core } = getApis(auth)
   const selector = [
     'involvedObject.kind=Deployment',
     `involvedObject.name=${name}`,
@@ -869,8 +964,8 @@ export async function getDeploymentEvents(
   return items
 }
 
-export async function listDeploymentPods(contextName: string, namespace: string, name: string) {
-  const { apps, core, metrics } = getApis(contextName)
+export async function listDeploymentPods(auth: K8sAuth | string, namespace: string, name: string) {
+  const { apps, core, metrics } = getApis(auth)
   const dep = await apps.readNamespacedDeployment({ name, namespace })
   const selector = labelSelectorString(dep.spec?.selector)
   if (!selector) return []
@@ -1094,9 +1189,9 @@ export function mapNode(node: V1Node) {
   }
 }
 
-export async function fetchSnapshot(contextName: string) {
+export async function fetchSnapshot(auth: K8sAuth | string) {
   const { kc, core, apps, net, storage, metrics, server, context, clusterName, user, namespace } =
-    getApis(contextName)
+    getApis(auth)
 
   const [
     nsRes,
@@ -1162,8 +1257,13 @@ export async function fetchSnapshot(contextName: string) {
   }
 }
 
-export async function testContext(contextName: string) {
-  const { core, server, context } = getApis(contextName)
-  await core.listNamespace()
-  return { context, server, ok: true as const }
+export async function testContext(auth: K8sAuth | string) {
+  const { core, server, context, user } = getApis(auth)
+  try {
+    await core.listNamespace()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!/403|Forbidden|forbidden/i.test(message)) throw err
+  }
+  return { context, server, user, ok: true as const }
 }

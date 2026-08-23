@@ -40,6 +40,10 @@ export function ConnectPage() {
     void loadContexts()
   }, [])
 
+  if (user?.provider === 'dex') {
+    return <Navigate to="/cluster" replace />
+  }
+
   if (connection) {
     return <Navigate to="/cluster" replace />
   }

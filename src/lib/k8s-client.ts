@@ -37,7 +37,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const data = (await res.json().catch(() => ({}))) as T & { error?: string }
   if (res.status === 401 && !path.startsWith('/api/auth/')) {
     window.location.assign('/login')
-    throw new Error(data.error || 'Требуется вход через Dex')
+    throw new Error(data.error || 'Требуется вход')
   }
   if (!res.ok) {
     throw new Error(data.error || `HTTP ${res.status}`)
@@ -64,7 +64,31 @@ export async function fetchKubeContexts(): Promise<{
   return api('/api/kubeconfig/contexts')
 }
 
+export async function loginWithKubeconfig(context: string): Promise<{
+  user: { sub: string; email: string; name: string; provider?: 'dex' | 'kubeconfig' }
+  context: string
+  server: string
+}> {
+  return api('/api/auth/kubeconfig', {
+    method: 'POST',
+    body: JSON.stringify({ context }),
+  })
+}
+
 export async function testConnection(connection: ClusterConnection): Promise<ClusterConnection> {
+  if (connection.mode === 'oidc') {
+    const result = await api<{ context: string; server: string; user?: string; ok: boolean }>('/api/connect', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'oidc' }),
+    })
+    return {
+      ...connection,
+      name: result.user || connection.name,
+      host: result.server,
+      context: undefined,
+    }
+  }
+
   if (connection.mode === 'kubeconfig') {
     if (!connection.context?.trim()) {
       throw new Error('Выберите context из kubeconfig')
@@ -90,7 +114,7 @@ export async function testConnection(connection: ClusterConnection): Promise<Clu
 }
 
 export async function fetchSnapshot(connection: ClusterConnection): Promise<ClusterSnapshot> {
-  if (connection.mode === 'kubeconfig') {
+  if (connection.mode === 'kubeconfig' || connection.mode === 'oidc') {
     return api(withContext('/api/snapshot', connection), {
       headers: contextHeaders(connection),
     })

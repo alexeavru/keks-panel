@@ -13,12 +13,14 @@ export interface AuthUser {
   sub: string
   email: string
   name: string
+  provider?: 'dex' | 'kubeconfig'
 }
 
 interface AuthContextValue {
   user: AuthUser | null
   loading: boolean
   logout: () => Promise<void>
+  applySession: (user: AuthUser) => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -54,7 +56,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }, [])
 
-  const value = useMemo(() => ({ user, loading, logout }), [user, loading, logout])
+  const applySession = useCallback((next: AuthUser) => {
+    setUser(next)
+  }, [])
+
+  const value = useMemo(
+    () => ({ user, loading, logout, applySession }),
+    [user, loading, logout, applySession],
+  )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

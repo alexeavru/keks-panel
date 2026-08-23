@@ -2,7 +2,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http'
 import { PassThrough } from 'node:stream'
 import { Exec } from '@kubernetes/client-node'
 import { WebSocket, WebSocketServer } from 'ws'
-import { readUserFromCookieHeader } from './auth.js'
+import { readOidcIdTokenFromCookieHeader, readUserFromCookieHeader } from './auth.js'
 import { getApis } from './k8s.js'
 
 type ResizableOut = PassThrough & { columns: number; rows: number }
@@ -49,16 +49,29 @@ async function handleExecSession(
   url: URL,
   namespace: string,
   name: string,
+  cookieHeader?: string,
 ) {
-  const context = url.searchParams.get('context') ?? ''
   const requested = url.searchParams.get('container') ?? ''
-  if (!context) {
+  const user = readUserFromCookieHeader(cookieHeader)
+  const oidcToken = readOidcIdTokenFromCookieHeader(cookieHeader)
+  const context = url.searchParams.get('context') ?? ''
+  if (user?.provider === 'dex') {
+    if (!oidcToken) {
+      sendJson(client, { type: 'error', message: 'Нет OIDC-токена. Войдите через Dex' })
+      client.close()
+      return
+    }
+  } else if (!context) {
     sendJson(client, { type: 'error', message: 'Укажите context' })
     client.close()
     return
   }
 
-  const { kc, core } = getApis(context)
+  const { kc, core } = getApis(
+    user?.provider === 'dex' && oidcToken
+      ? { type: 'oidc', token: oidcToken }
+      : context,
+  )
   const pod = await core.readNamespacedPod({ name, namespace })
   const containers = (pod.spec?.containers ?? []).map((c) => c.name)
   const selected = requested && containers.includes(requested) ? requested : containers[0]
@@ -207,7 +220,7 @@ export function attachPodExec(server: HttpServer) {
     const namespace = decodeURIComponent(match[1])
     const name = decodeURIComponent(match[2])
     wss.handleUpgrade(req, socket, head, (ws) => {
-      void handleExecSession(ws, url, namespace, name).catch((err: unknown) => {
+      void handleExecSession(ws, url, namespace, name, req.headers.cookie).catch((err: unknown) => {
         const message = err instanceof Error ? err.message : 'Не удалось открыть терминал'
         sendJson(ws, { type: 'error', message })
         ws.close()

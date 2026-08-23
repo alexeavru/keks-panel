@@ -10,11 +10,13 @@ metadata:
   namespace: dex
 data:
   config.yaml: |
-    issuer: http://127.0.0.1:5556/dex
+    issuer: https://host.docker.internal:5556/dex
     storage:
       type: memory
     web:
-      http: 0.0.0.0:5556
+      https: 0.0.0.0:5556
+      tlsCert: /etc/dex/tls/tls.crt
+      tlsKey: /etc/dex/tls/tls.key
     telemetry:
       http: 0.0.0.0:5558
     logger:
@@ -36,6 +38,7 @@ data:
           - http://localhost:5173/api/auth/callback
           - http://127.0.0.1:5173/auth/callback
           - http://127.0.0.1:5173/api/auth/callback
+          - http://localhost:8080/api/auth/callback
         name: KEKS Panel
         secret: keks-panel-dev
 ---
@@ -64,7 +67,7 @@ spec:
             - serve
             - /etc/dex/config.yaml
           ports:
-            - name: http
+            - name: https
               containerPort: 5556
             - name: telemetry
               containerPort: 5558
@@ -72,16 +75,17 @@ spec:
             - name: config
               mountPath: /etc/dex
               readOnly: true
+            - name: tls
+              mountPath: /etc/dex/tls
+              readOnly: true
           readinessProbe:
-            httpGet:
-              path: /dex/healthz
-              port: http
+            tcpSocket:
+              port: https
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
-            httpGet:
-              path: /dex/healthz
-              port: http
+            tcpSocket:
+              port: https
             initialDelaySeconds: 10
             periodSeconds: 20
           resources:
@@ -95,6 +99,9 @@ spec:
         - name: config
           configMap:
             name: dex
+        - name: tls
+          secret:
+            secretName: dex-tls
 ---
 apiVersion: v1
 kind: Service
@@ -108,8 +115,8 @@ spec:
   selector:
     app: dex
   ports:
-    - name: http
+    - name: https
       port: 5556
-      targetPort: http
+      targetPort: https
       nodePort: 32056
       protocol: TCP

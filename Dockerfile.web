@@ -1,0 +1,16 @@
+# docker build -f Dockerfile.web -t keks-panel-web .
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY package.json ./
+RUN npm install
+COPY index.html vite.config.ts tsconfig.json tsconfig.node.json \
+     tailwind.config.js postcss.config.js ./
+COPY src ./src
+COPY public ./public
+RUN npm run build
+
+FROM nginx:1.27-alpine
+ENV API_UPSTREAM=http://api:8787
+COPY docker/nginx-default.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80

@@ -1,9 +1,11 @@
 import {
   createContext,
-  useContext,
-  useMemo,
-  useState,
   useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
   type ReactNode,
 } from 'react'
 import {
@@ -13,6 +15,7 @@ import {
   testConnection,
 } from '@/lib/k8s-client'
 import type { ClusterConnection } from '@/types/k8s'
+import { useAuth } from '@/context/AuthContext'
 
 const NS_KEY = 'keks.namespace'
 
@@ -51,10 +54,12 @@ interface ClusterContextValue {
 const ClusterContext = createContext<ClusterContextValue | null>(null)
 
 export function ClusterProvider({ children }: { children: ReactNode }) {
+  const { user, loading: authLoading } = useAuth()
   const [connection, setConnection] = useState<ClusterConnection | null>(() => loadConnection())
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [namespace, setNamespaceState] = useState<string>(() => loadNamespace())
+  const dexTried = useRef(false)
 
   const setNamespace = useCallback((next: string) => {
     setNamespaceState(next)
@@ -89,6 +94,27 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
     setNamespaceState('')
     setError(null)
   }, [])
+
+  useEffect(() => {
+    if (authLoading) return
+    if (!user || user.provider !== 'dex') {
+      dexTried.current = false
+      return
+    }
+    if (connection && connection.mode !== 'oidc') {
+      clearConnection()
+      setConnection(null)
+    }
+    if (connection?.mode === 'oidc' || connecting || dexTried.current) return
+    dexTried.current = true
+    void connect({
+      name: user.email || user.name,
+      host: '',
+      token: '',
+      skipTlsVerify: true,
+      mode: 'oidc',
+    }).catch(() => {})
+  }, [authLoading, user, connection, connecting, connect])
 
   const value = useMemo(
     () => ({
