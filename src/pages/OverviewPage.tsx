@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Box, Boxes, Database, FileCode, Globe, HardDrive, Layers, Network, Server } from 'lucide-react'
+import { Box, Boxes, Database, FileCode, Globe, HardDrive, KeyRound, Layers, Network, Server } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
 import { fetchSnapshot } from '@/lib/k8s-client'
 import { formatAge, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
@@ -88,6 +88,12 @@ export function OverviewPage() {
           icon: FileCode,
         },
         {
+          label: 'Secrets',
+          value: snap.secrets.length,
+          to: '/cluster/secrets',
+          icon: KeyRound,
+        },
+        {
           label: 'PersistentVolumes',
           value: snap.persistentVolumes.length,
           to: '/cluster/persistentvolumes',
@@ -133,7 +139,7 @@ export function OverviewPage() {
 
       <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {loading && !snap
-          ? Array.from({ length: 11 }).map((_, i) => (
+          ? Array.from({ length: 12 }).map((_, i) => (
               <div key={i} className="surface h-28 animate-pulse" />
             ))
           : cards.map(({ label, value, to, icon: Icon }) => (

@@ -12,6 +12,7 @@ import { StatefulSetsPage } from '@/pages/StatefulSetsPage'
 import { ServicesPage } from '@/pages/ServicesPage'
 import { IngressesPage } from '@/pages/IngressesPage'
 import { ConfigMapsPage } from '@/pages/ConfigMapsPage'
+import { SecretsPage } from '@/pages/SecretsPage'
 import { PersistentVolumesPage } from '@/pages/PersistentVolumesPage'
 import { PersistentVolumeClaimsPage } from '@/pages/PersistentVolumeClaimsPage'
 import { StorageClassesPage } from '@/pages/StorageClassesPage'
@@ -66,6 +67,7 @@ export default function App() {
               <Route path="services" element={<ServicesPage />} />
               <Route path="ingresses" element={<IngressesPage />} />
               <Route path="configmaps" element={<ConfigMapsPage />} />
+              <Route path="secrets" element={<SecretsPage />} />
               <Route path="persistentvolumes" element={<PersistentVolumesPage />} />
               <Route path="persistentvolumeclaims" element={<PersistentVolumeClaimsPage />} />
               <Route path="storageclasses" element={<StorageClassesPage />} />

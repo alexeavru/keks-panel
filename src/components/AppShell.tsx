@@ -28,6 +28,7 @@ const workloadNav = [
   { to: '/cluster/deployments', label: 'Deployments' },
   { to: '/cluster/statefulsets', label: 'StatefulSets' },
   { to: '/cluster/configmaps', label: 'ConfigMaps' },
+  { to: '/cluster/secrets', label: 'Secrets' },
 ]
 
 const networkingNav = [

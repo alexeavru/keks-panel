@@ -6,6 +6,7 @@ export type ResourceKind =
   | 'Service'
   | 'Ingress'
   | 'ConfigMap'
+  | 'Secret'
   | 'PersistentVolume'
   | 'PersistentVolumeClaim'
   | 'StorageClass'
@@ -179,6 +180,13 @@ export interface ConfigMap {
   binaryDataKeys: string[]
 }
 
+export interface Secret {
+  kind: 'Secret'
+  metadata: K8sObjectMeta
+  type: string
+  dataKeys: string[]
+}
+
 export interface PersistentVolume {
   kind: 'PersistentVolume'
   metadata: K8sObjectMeta
@@ -254,6 +262,7 @@ export type K8sResource =
   | Service
   | Ingress
   | ConfigMap
+  | Secret
   | PersistentVolume
   | PersistentVolumeClaim
   | StorageClass
@@ -267,6 +276,7 @@ export interface ClusterSnapshot {
   services: Service[]
   ingresses: Ingress[]
   configMaps: ConfigMap[]
+  secrets: Secret[]
   persistentVolumes: PersistentVolume[]
   persistentVolumeClaims: PersistentVolumeClaim[]
   storageClasses: StorageClass[]

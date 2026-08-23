@@ -13,6 +13,7 @@ import {
   mapService,
   mapIngress,
   mapConfigMap,
+  mapSecret,
   mapPersistentVolume,
   mapPersistentVolumeClaim,
   mapStorageClass,
@@ -255,6 +256,20 @@ app.get('/api/configmaps', async (req, res) => {
       ? await core.listNamespacedConfigMap({ namespace })
       : await core.listConfigMapForAllNamespaces()
     res.json((result.items ?? []).map(mapConfigMap))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/secrets', async (req, res) => {
+  try {
+    const context = contextFromReq(req)
+    const namespace = typeof req.query.namespace === 'string' ? req.query.namespace : ''
+    const { core } = getApis(context)
+    const result = namespace
+      ? await core.listNamespacedSecret({ namespace })
+      : await core.listSecretForAllNamespaces()
+    res.json((result.items ?? []).map(mapSecret))
   } catch (err) {
     sendError(res, err)
   }

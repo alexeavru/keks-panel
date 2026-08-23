@@ -9,6 +9,7 @@ import type {
   Service,
   Ingress,
   ConfigMap,
+  Secret,
   PersistentVolume,
   PersistentVolumeClaim,
   StorageClass,
@@ -218,6 +219,15 @@ export async function listConfigMaps(
   namespace?: string,
 ): Promise<ConfigMap[]> {
   return api(withContext('/api/configmaps', connection, namespace), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listSecrets(
+  connection: ClusterConnection,
+  namespace?: string,
+): Promise<Secret[]> {
+  return api(withContext('/api/secrets', connection, namespace), {
     headers: contextHeaders(connection),
   })
 }

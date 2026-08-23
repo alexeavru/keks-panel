@@ -16,6 +16,7 @@ import {
   type V1ResourceRequirements,
   type V1Service,
   type V1ConfigMap,
+  type V1Secret,
   type V1PersistentVolume,
   type V1PersistentVolumeClaim,
   type V1StorageClass,
@@ -802,6 +803,19 @@ export function mapConfigMap(cm: V1ConfigMap) {
   }
 }
 
+export function mapSecret(secret: V1Secret) {
+  const keys = [
+    ...Object.keys(secret.data ?? {}),
+    ...Object.keys(secret.stringData ?? {}),
+  ]
+  return {
+    kind: 'Secret' as const,
+    metadata: meta(secret),
+    type: secret.type ?? 'Opaque',
+    dataKeys: [...new Set(keys)],
+  }
+}
+
 function shortAccessModes(modes?: string[]): string {
   const names: Record<string, string> = {
     ReadWriteOnce: 'RWO',
@@ -912,6 +926,7 @@ export async function fetchSnapshot(contextName: string) {
     svcRes,
     ingRes,
     cmRes,
+    secretRes,
     pvRes,
     pvcRes,
     scRes,
@@ -926,6 +941,7 @@ export async function fetchSnapshot(contextName: string) {
     core.listServiceForAllNamespaces(),
     net.listIngressForAllNamespaces(),
     core.listConfigMapForAllNamespaces(),
+    core.listSecretForAllNamespaces(),
     core.listPersistentVolume(),
     core.listPersistentVolumeClaimForAllNamespaces(),
     storage.listStorageClass(),
@@ -958,6 +974,7 @@ export async function fetchSnapshot(contextName: string) {
     services: (svcRes.items ?? []).map(mapService),
     ingresses: (ingRes.items ?? []).map(mapIngress),
     configMaps: (cmRes.items ?? []).map(mapConfigMap),
+    secrets: (secretRes.items ?? []).map(mapSecret),
     persistentVolumes: (pvRes.items ?? []).map(mapPersistentVolume),
     persistentVolumeClaims: (pvcRes.items ?? []).map(mapPersistentVolumeClaim),
     storageClasses: (scRes.items ?? []).map(mapStorageClass),
