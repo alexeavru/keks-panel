@@ -34,10 +34,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   })
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string }
-  if (res.status === 401 && !path.startsWith('/api/auth/')) {
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string }
+  if (res.status === 401 && data.code === 'oidc_reauth') {
+    throw new Error(data.error || 'Кластер не принял OIDC-токен. Выйдите и войдите через Dex снова.')
+  }
+  if (res.status === 401 && data.error === 'Требуется вход') {
     window.location.assign('/login')
-    throw new Error(data.error || 'Требуется вход')
+    throw new Error(data.error)
   }
   if (!res.ok) {
     throw new Error(data.error || `HTTP ${res.status}`)

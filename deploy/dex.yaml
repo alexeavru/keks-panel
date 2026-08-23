@@ -12,7 +12,9 @@ data:
   config.yaml: |
     issuer: https://host.docker.internal:5556/dex
     storage:
-      type: memory
+      type: sqlite3
+      config:
+        file: /var/dex/dex.db
     web:
       https: 0.0.0.0:5556
       tlsCert: /etc/dex/tls/tls.crt
@@ -24,6 +26,7 @@ data:
       format: text
     oauth2:
       skipApprovalScreen: true
+      passwordConnector: local
     enablePasswordDB: true
     staticPasswords:
       - email: admin@keks.local
@@ -59,6 +62,13 @@ spec:
       labels:
         app: dex
     spec:
+      initContainers:
+        - name: init-data
+          image: busybox:1.36
+          command: ['sh', '-c', 'mkdir -p /var/dex && chmod 777 /var/dex']
+          volumeMounts:
+            - name: data
+              mountPath: /var/dex
       containers:
         - name: dex
           image: ghcr.io/dexidp/dex:v2.41.1
@@ -78,6 +88,8 @@ spec:
             - name: tls
               mountPath: /etc/dex/tls
               readOnly: true
+            - name: data
+              mountPath: /var/dex
           readinessProbe:
             tcpSocket:
               port: https
@@ -102,6 +114,10 @@ spec:
         - name: tls
           secret:
             secretName: dex-tls
+        - name: data
+          hostPath:
+            path: /var/lib/keks-dex
+            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service

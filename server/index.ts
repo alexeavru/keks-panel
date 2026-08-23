@@ -28,6 +28,10 @@ import {
   getDeploymentEvents,
   listDeploymentPods,
   testContext,
+  isK8sAccessDenied,
+  isK8sUnauthorized,
+  isOidcReauthError,
+  OIDC_REAUTH_MESSAGE,
   type K8sAuth,
 } from './k8s.js'
 import { ensureOidcToken, handleCallback, loginWithKubeconfig, logout, me, readUser, requireAuth, startLogin } from './auth.js'
@@ -59,9 +63,26 @@ async function k8sAuthFromReq(req: express.Request, res: express.Response): Prom
 }
 
 function sendError(res: express.Response, err: unknown, status = 500) {
+  if (isOidcReauthError(err) || isK8sUnauthorized(err)) {
+    const message = isOidcReauthError(err) ? err.message : OIDC_REAUTH_MESSAGE
+    res.status(401).json({ error: message, code: 'oidc_reauth' })
+    return
+  }
   const message = err instanceof Error ? err.message : String(err)
+  if (isK8sAccessDenied(err)) {
+    res.status(403).json({ error: message, code: 'forbidden' })
+    return
+  }
   const code = /не найден|Укажите context|Нет OIDC|истёк/i.test(message) ? 400 : status
   res.status(code).json({ error: message })
+}
+
+function sendEmptyIfDenied(res: express.Response, err: unknown) {
+  if (isK8sAccessDenied(err)) {
+    res.json([])
+    return
+  }
+  sendError(res, err)
 }
 
 app.get('/api/health', (_req, res) => {
@@ -140,7 +161,7 @@ app.get('/api/namespaces', async (req, res) => {
     const result = await core.listNamespace()
     res.json((result.items ?? []).map(mapNamespace))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -150,7 +171,7 @@ app.get('/api/pods', async (req, res) => {
     const namespace = typeof req.query.namespace === 'string' ? req.query.namespace : ''
     res.json(await listMappedPods(context, namespace || undefined))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -225,7 +246,7 @@ app.get('/api/deployments', async (req, res) => {
       : await apps.listDeploymentForAllNamespaces()
     res.json((result.items ?? []).map(mapDeployment))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -287,7 +308,7 @@ app.get('/api/statefulsets', async (req, res) => {
       : await apps.listStatefulSetForAllNamespaces()
     res.json((result.items ?? []).map(mapStatefulSet))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -301,7 +322,7 @@ app.get('/api/services', async (req, res) => {
       : await core.listServiceForAllNamespaces()
     res.json((result.items ?? []).map(mapService))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -315,7 +336,7 @@ app.get('/api/ingresses', async (req, res) => {
       : await net.listIngressForAllNamespaces()
     res.json((result.items ?? []).map(mapIngress))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -329,7 +350,7 @@ app.get('/api/configmaps', async (req, res) => {
       : await core.listConfigMapForAllNamespaces()
     res.json((result.items ?? []).map(mapConfigMap))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -343,7 +364,7 @@ app.get('/api/secrets', async (req, res) => {
       : await core.listSecretForAllNamespaces()
     res.json((result.items ?? []).map(mapSecret))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -354,7 +375,7 @@ app.get('/api/persistentvolumes', async (req, res) => {
     const result = await core.listPersistentVolume()
     res.json((result.items ?? []).map(mapPersistentVolume))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -368,7 +389,7 @@ app.get('/api/persistentvolumeclaims', async (req, res) => {
       : await core.listPersistentVolumeClaimForAllNamespaces()
     res.json((result.items ?? []).map(mapPersistentVolumeClaim))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -379,7 +400,7 @@ app.get('/api/storageclasses', async (req, res) => {
     const result = await storage.listStorageClass()
     res.json((result.items ?? []).map(mapStorageClass))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
 })
 
@@ -390,8 +411,16 @@ app.get('/api/nodes', async (req, res) => {
     const result = await core.listNode()
     res.json((result.items ?? []).map(mapNode))
   } catch (err) {
-    sendError(res, err)
+    sendEmptyIfDenied(res, err)
   }
+})
+
+app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) {
+    next(err)
+    return
+  }
+  sendError(res, err)
 })
 
 const server = createServer(app)

@@ -141,6 +141,51 @@ function clientsFromKubeConfig(kc: KubeConfig, server: string, context: string, 
   }
 }
 
+export const OIDC_REAUTH_MESSAGE =
+  'Кластер не принял подпись OIDC-токена. Если недавно перезапускали Dex, выполните ./deploy/refresh-apiserver-oidc.sh и войдите через Dex снова.'
+
+export class OidcReauthError extends Error {
+  readonly code = 'oidc_reauth' as const
+  constructor(message = OIDC_REAUTH_MESSAGE) {
+    super(message)
+    this.name = 'OidcReauthError'
+  }
+}
+
+function k8sStatusCode(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined
+  const rec = err as { code?: unknown; statusCode?: unknown; response?: { statusCode?: unknown } }
+  return [rec.code, rec.statusCode, rec.response?.statusCode]
+    .map((value) => Number(value))
+    .find((value) => value >= 400 && value < 600)
+}
+
+export function isK8sAccessDenied(err: unknown): boolean {
+  if (k8sStatusCode(err) === 403) return true
+  const message = err instanceof Error ? err.message : String(err)
+  return /HTTP-Code:\s*403\b|\bForbidden\b|forbidden/i.test(message)
+}
+
+export function isK8sUnauthorized(err: unknown): boolean {
+  if (err instanceof OidcReauthError) return true
+  if (k8sStatusCode(err) === 401) return true
+  const message = err instanceof Error ? err.message : String(err)
+  return /HTTP-Code:\s*401\b|invalid bearer token|\bUnauthorized\b/i.test(message)
+}
+
+export function isOidcReauthError(err: unknown): err is OidcReauthError {
+  return err instanceof OidcReauthError || (err as { code?: string })?.code === 'oidc_reauth'
+}
+
+async function optionalK8sList<T>(fn: () => Promise<{ items?: T[] }>): Promise<T[]> {
+  try {
+    return (await fn()).items ?? []
+  } catch (err) {
+    if (isK8sAccessDenied(err)) return []
+    throw err
+  }
+}
+
 export function getApis(auth: K8sAuth | string): {
   kc: KubeConfig
   core: CoreV1Api
@@ -431,15 +476,13 @@ async function loadPodUsageMap(metrics: Metrics, namespace?: string) {
 
 export async function listMappedPods(auth: K8sAuth | string, namespace?: string) {
   const { core, metrics } = getApis(auth)
-  const [podRes, usageMap] = await Promise.all([
-    namespace
-      ? core.listNamespacedPod({ namespace })
-      : core.listPodForAllNamespaces(),
+  const [pods, usageMap] = await Promise.all([
+    optionalK8sList(() =>
+      namespace ? core.listNamespacedPod({ namespace }) : core.listPodForAllNamespaces(),
+    ),
     loadPodUsageMap(metrics, namespace),
   ])
-  return (podRes.items ?? []).map((p) =>
-    mapPod(p, usageMap.get(podKey(p.metadata?.namespace, p.metadata?.name))),
-  )
+  return pods.map((p) => mapPod(p, usageMap.get(podKey(p.metadata?.namespace, p.metadata?.name))))
 }
 
 export async function deletePod(auth: K8sAuth | string, namespace: string, name: string) {
@@ -1194,38 +1237,38 @@ export async function fetchSnapshot(auth: K8sAuth | string) {
     getApis(auth)
 
   const [
-    nsRes,
-    podRes,
-    depRes,
-    stsRes,
-    svcRes,
-    ingRes,
-    cmRes,
-    secretRes,
-    pvRes,
-    pvcRes,
-    scRes,
-    nodeRes,
+    namespaces,
+    pods,
+    deployments,
+    statefulSets,
+    services,
+    ingresses,
+    configMaps,
+    secrets,
+    persistentVolumes,
+    persistentVolumeClaims,
+    storageClasses,
+    nodeItems,
     usageMap,
     version,
   ] = await Promise.all([
-    core.listNamespace(),
-    core.listPodForAllNamespaces(),
-    apps.listDeploymentForAllNamespaces(),
-    apps.listStatefulSetForAllNamespaces(),
-    core.listServiceForAllNamespaces(),
-    net.listIngressForAllNamespaces(),
-    core.listConfigMapForAllNamespaces(),
-    core.listSecretForAllNamespaces(),
-    core.listPersistentVolume(),
-    core.listPersistentVolumeClaimForAllNamespaces(),
-    storage.listStorageClass(),
-    core.listNode(),
+    optionalK8sList(() => core.listNamespace()),
+    optionalK8sList(() => core.listPodForAllNamespaces()),
+    optionalK8sList(() => apps.listDeploymentForAllNamespaces()),
+    optionalK8sList(() => apps.listStatefulSetForAllNamespaces()),
+    optionalK8sList(() => core.listServiceForAllNamespaces()),
+    optionalK8sList(() => net.listIngressForAllNamespaces()),
+    optionalK8sList(() => core.listConfigMapForAllNamespaces()),
+    optionalK8sList(() => core.listSecretForAllNamespaces()),
+    optionalK8sList(() => core.listPersistentVolume()),
+    optionalK8sList(() => core.listPersistentVolumeClaimForAllNamespaces()),
+    optionalK8sList(() => storage.listStorageClass()),
+    optionalK8sList(() => core.listNode()),
     loadPodUsageMap(metrics),
     readClusterVersion(kc, server),
   ])
 
-  const nodes = (nodeRes.items ?? []).map(mapNode)
+  const nodes = nodeItems.map(mapNode)
   const fallbackVersion = nodes.find((n) => n.status.version)?.status.version
 
   return {
@@ -1240,30 +1283,34 @@ export async function fetchSnapshot(auth: K8sAuth | string) {
       version: version.version !== '—' ? version.version : fallbackVersion ?? '—',
       platform: version.platform,
     },
-    namespaces: (nsRes.items ?? []).map(mapNamespace),
-    pods: (podRes.items ?? []).map((p) =>
-      mapPod(p, usageMap.get(podKey(p.metadata?.namespace, p.metadata?.name))),
-    ),
-    deployments: (depRes.items ?? []).map(mapDeployment),
-    statefulSets: (stsRes.items ?? []).map(mapStatefulSet),
-    services: (svcRes.items ?? []).map(mapService),
-    ingresses: (ingRes.items ?? []).map(mapIngress),
-    configMaps: (cmRes.items ?? []).map(mapConfigMap),
-    secrets: (secretRes.items ?? []).map(mapSecret),
-    persistentVolumes: (pvRes.items ?? []).map(mapPersistentVolume),
-    persistentVolumeClaims: (pvcRes.items ?? []).map(mapPersistentVolumeClaim),
-    storageClasses: (scRes.items ?? []).map(mapStorageClass),
+    namespaces: namespaces.map(mapNamespace),
+    pods: pods.map((p) => mapPod(p, usageMap.get(podKey(p.metadata?.namespace, p.metadata?.name)))),
+    deployments: deployments.map(mapDeployment),
+    statefulSets: statefulSets.map(mapStatefulSet),
+    services: services.map(mapService),
+    ingresses: ingresses.map(mapIngress),
+    configMaps: configMaps.map(mapConfigMap),
+    secrets: secrets.map(mapSecret),
+    persistentVolumes: persistentVolumes.map(mapPersistentVolume),
+    persistentVolumeClaims: persistentVolumeClaims.map(mapPersistentVolumeClaim),
+    storageClasses: storageClasses.map(mapStorageClass),
     nodes,
   }
 }
 
 export async function testContext(auth: K8sAuth | string) {
-  const { core, server, context, user } = getApis(auth)
+  const resolved: K8sAuth = typeof auth === 'string' ? { type: 'kubeconfig', context: auth } : auth
+  const { core, server, context, user } = getApis(resolved)
   try {
     await core.listNamespace()
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    if (!/403|Forbidden|forbidden/i.test(message)) throw err
+    if (isK8sAccessDenied(err)) {
+      /* RBAC без list namespaces — панель всё равно открываем */
+    } else if (resolved.type === 'oidc' && isK8sUnauthorized(err)) {
+      throw new OidcReauthError()
+    } else {
+      throw err
+    }
   }
   return { context, server, user, ok: true as const }
 }

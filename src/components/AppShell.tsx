@@ -48,6 +48,14 @@ const WORKLOAD_KEY = 'keks.nav.workload'
 const NETWORKING_KEY = 'keks.nav.networking'
 const STORAGE_KEY = 'keks.nav.storage'
 
+function clusterConnectMessage(error: string | null): string | null {
+  if (!error) return null
+  if (/HTTP-Code:\s*401|\bUnauthorized\b|oidc_reauth|не принял OIDC|истёк|Нет OIDC/i.test(error)) {
+    return 'Кластер не принял OIDC-токен. Выйдите и войдите через Dex снова.'
+  }
+  return error
+}
+
 function loadNavOpen(key: string): boolean {
   try {
     const saved = localStorage.getItem(key)
@@ -175,23 +183,37 @@ export function AppShell() {
     }
   }, [connection])
 
-  if (!connection) {
-    if (user?.provider === 'dex' || connecting) {
-      return (
-        <div className="flex min-h-screen items-center justify-center bg-ink-50 bg-tri-grid">
-          <p className="font-mono text-sm text-ink-500">
-            {error || 'Подключение к кластеру по токену Dex…'}
-          </p>
-        </div>
-      )
-    }
-    return <Navigate to="/connect" replace />
-  }
-
   const handleLogout = async () => {
     disconnect()
     await logout()
     navigate('/login')
+  }
+
+  const handleDexReauth = async () => {
+    disconnect()
+    await logout()
+    window.location.assign('/api/auth/login')
+  }
+
+  if (!connection) {
+    if (user?.provider === 'dex' || connecting) {
+      const connectError = clusterConnectMessage(error)
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-ink-50 bg-tri-grid px-6">
+          <div className="max-w-md space-y-4 text-center">
+            <p className="break-words font-mono text-sm text-ink-500">
+              {connectError || 'Подключение к кластеру по токену Dex…'}
+            </p>
+            {error ? (
+              <button type="button" className="btn-primary mx-auto" onClick={() => void handleDexReauth()}>
+                Войти через Dex снова
+              </button>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+    return <Navigate to="/connect" replace />
   }
 
   const toggleWorkload = () => {
@@ -226,7 +248,7 @@ export function AppShell() {
               KEKS
             </p>
             <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">
-              panel · 0.4.0
+              panel · 0.4.1
             </p>
           </div>
 

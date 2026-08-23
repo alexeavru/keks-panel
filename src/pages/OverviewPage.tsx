@@ -24,6 +24,30 @@ export function OverviewPage() {
     if (!silent) setLoading(true)
     try {
       setSnap(await fetchSnapshot(connection))
+    } catch {
+      setSnap((prev) =>
+        prev ?? {
+          namespaces: [],
+          pods: [],
+          deployments: [],
+          statefulSets: [],
+          services: [],
+          ingresses: [],
+          configMaps: [],
+          secrets: [],
+          persistentVolumes: [],
+          persistentVolumeClaims: [],
+          storageClasses: [],
+          nodes: [],
+          info: {
+            name: connection.name,
+            context: connection.context ?? 'oidc',
+            server: connection.host,
+            user: connection.name,
+            version: '—',
+          },
+        },
+      )
     } finally {
       if (!silent) setLoading(false)
     }

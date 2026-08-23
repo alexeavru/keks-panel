@@ -55,7 +55,7 @@ export function PodTerminal({
 
   useEffect(() => {
     const el = hostRef.current
-    if (!el || !connection.context || !namespace || !name) return
+    if (!el || !namespace || !name) return
 
     const fontSize = 14
     const lineHeight = 1.35
@@ -208,7 +208,7 @@ export function PodTerminal({
       ws?.close()
       term.dispose()
     }
-  }, [connection.context, namespace, name, container, reconnectKey])
+  }, [connection, namespace, name, container, reconnectKey])
 
   return (
     <div>

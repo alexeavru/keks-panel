@@ -4,7 +4,7 @@ import https from 'node:https'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Request, Response, NextFunction } from 'express'
-import { testContext } from './k8s.js'
+import { OidcReauthError, testContext } from './k8s.js'
 
 const defaultDexCa = join(dirname(fileURLToPath(import.meta.url)), '../deploy/tls/ca.crt')
 
@@ -80,7 +80,8 @@ export interface AuthUser {
 }
 
 const SESSION_COOKIE = 'keks.sid'
-const OIDC_COOKIE = 'keks.oidc'
+const OIDC_ID_COOKIE = 'keks.oidc.id'
+const OIDC_RT_COOKIE = 'keks.oidc.rt'
 const STATE_COOKIE = 'keks.oauth.state'
 const VERIFIER_COOKIE = 'keks.oauth.verifier'
 const SESSION_TTL_SEC = 8 * 60 * 60
@@ -200,22 +201,43 @@ function jwtExp(token: string): number {
   }
 }
 
-function readOidcTokensFromHeader(cookieHeader?: string | string[]): OidcTokens | null {
-  const header = Array.isArray(cookieHeader) ? cookieHeader.join('; ') : cookieHeader
-  const raw = parseCookies(header)[OIDC_COOKIE]
-  if (!raw) return null
-  const json = unsign(raw, dexConfig().sessionSecret)
-  if (!json) return null
+function jwtKid(token: string): string {
   try {
-    const tokens = JSON.parse(json) as OidcTokens
-    return tokens.idToken ? tokens : null
+    const header = JSON.parse(Buffer.from(token.split('.')[0] ?? '', 'base64url').toString('utf8')) as {
+      kid?: string
+    }
+    return header.kid ?? ''
   } catch {
-    return null
+    return ''
   }
 }
 
-function oidcCookieValue(tokens: OidcTokens): string {
-  return cookie(OIDC_COOKIE, sign(JSON.stringify(tokens), dexConfig().sessionSecret), SESSION_TTL_SEC)
+async function dexSigningKids(): Promise<string[]> {
+  const res = await dexFetch(`${dexConfig().publicBase}/keys`)
+  const json = (await res.json().catch(() => ({}))) as { keys?: { kid?: string }[] }
+  if (!res.ok) return []
+  return (json.keys ?? []).map((key) => key.kid).filter((kid): kid is string => Boolean(kid))
+}
+
+function readOidcTokensFromHeader(cookieHeader?: string | string[]): OidcTokens | null {
+  const header = Array.isArray(cookieHeader) ? cookieHeader.join('; ') : cookieHeader
+  const cookies = parseCookies(header)
+  const idToken = cookies[OIDC_ID_COOKIE]
+  if (!idToken) return null
+  return { idToken, refreshToken: cookies[OIDC_RT_COOKIE] || undefined }
+}
+
+function setOidcCookies(res: Response, tokens: OidcTokens) {
+  appendCookie(res, cookie(OIDC_ID_COOKIE, tokens.idToken, SESSION_TTL_SEC))
+  if (tokens.refreshToken) {
+    appendCookie(res, cookie(OIDC_RT_COOKIE, tokens.refreshToken, SESSION_TTL_SEC))
+  } else {
+    appendCookie(res, clearCookie(OIDC_RT_COOKIE))
+  }
+}
+
+function clearOidcCookies(): string[] {
+  return [clearCookie(OIDC_ID_COOKIE), clearCookie(OIDC_RT_COOKIE), clearCookie('keks.oidc')]
 }
 
 async function refreshOidc(refreshToken: string): Promise<OidcTokens> {
@@ -243,19 +265,41 @@ async function refreshOidc(refreshToken: string): Promise<OidcTokens> {
 }
 
 export async function ensureOidcToken(req: Request, res: Response): Promise<string> {
-  const tokens = readOidcTokensFromHeader(req.headers.cookie)
+  let tokens = readOidcTokensFromHeader(req.headers.cookie)
   if (!tokens?.idToken) {
-    throw new Error('Нет OIDC-токена. Войдите через Dex')
+    throw new OidcReauthError('Нет OIDC-токена. Войдите через Dex')
   }
   const exp = jwtExp(tokens.idToken)
   const now = Math.floor(Date.now() / 1000)
-  if (exp - now > 45) return tokens.idToken
-  if (!tokens.refreshToken) {
-    throw new Error('OIDC-токен истёк. Войдите через Dex снова')
+  if (exp - now <= 45) {
+    if (!tokens.refreshToken) {
+      throw new OidcReauthError()
+    }
+    try {
+      tokens = await refreshOidc(tokens.refreshToken)
+      setOidcCookies(res, tokens)
+    } catch {
+      throw new OidcReauthError()
+    }
   }
-  const next = await refreshOidc(tokens.refreshToken)
-  appendCookie(res, oidcCookieValue(next))
-  return next.idToken
+
+  const kids = await dexSigningKids().catch(() => [] as string[])
+  const kid = jwtKid(tokens.idToken)
+  if (kids.length && kid && !kids.includes(kid)) {
+    if (!tokens.refreshToken) throw new OidcReauthError()
+    try {
+      tokens = await refreshOidc(tokens.refreshToken)
+      setOidcCookies(res, tokens)
+    } catch {
+      throw new OidcReauthError()
+    }
+    const nextKid = jwtKid(tokens.idToken)
+    if (kids.length && nextKid && !kids.includes(nextKid)) {
+      throw new OidcReauthError()
+    }
+  }
+
+  return tokens.idToken
 }
 
 export function readOidcIdTokenFromCookieHeader(cookieHeader?: string | string[]): string | null {
@@ -362,10 +406,11 @@ export async function handleCallback(req: Request, res: Response) {
 
   res.setHeader('Set-Cookie', [
     cookie(SESSION_COOKIE, sign(JSON.stringify(user), cfg.sessionSecret), SESSION_TTL_SEC),
-    oidcCookieValue({ idToken: tokenJson.id_token, refreshToken: tokenJson.refresh_token }),
     clearCookie(STATE_COOKIE),
     clearCookie(VERIFIER_COOKIE),
+    ...clearOidcCookies(),
   ])
+  setOidcCookies(res, { idToken: tokenJson.id_token, refreshToken: tokenJson.refresh_token })
   res.redirect(302, `${cfg.frontendOrigin}/cluster`)
   } catch (err) {
     console.error('dex callback failed', err)
@@ -374,7 +419,7 @@ export async function handleCallback(req: Request, res: Response) {
 }
 
 export function logout(_req: Request, res: Response) {
-  res.setHeader('Set-Cookie', [clearCookie(SESSION_COOKIE), clearCookie(OIDC_COOKIE)])
+  res.setHeader('Set-Cookie', [clearCookie(SESSION_COOKIE), ...clearOidcCookies()])
   res.json({ ok: true })
 }
 
@@ -406,7 +451,7 @@ export function publicUser(user: AuthUser) {
 export function writeSessionCookie(res: Response, user: AuthUser) {
   res.setHeader('Set-Cookie', [
     cookie(SESSION_COOKIE, sign(JSON.stringify(user), dexConfig().sessionSecret), SESSION_TTL_SEC),
-    clearCookie(OIDC_COOKIE),
+    ...clearOidcCookies(),
   ])
 }
 
