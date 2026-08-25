@@ -27,6 +27,8 @@ import {
   applyDeploymentYaml,
   getDeploymentEvents,
   listDeploymentPods,
+  getConfigMapDetail,
+  applyConfigMapYaml,
   testContext,
   isK8sAccessDenied,
   isK8sUnauthorized,
@@ -62,13 +64,27 @@ async function k8sAuthFromReq(req: express.Request, res: express.Response): Prom
   return { type: 'kubeconfig', context: contextFromReq(req) }
 }
 
+function errorMessage(err: unknown): string {
+  const parts: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = err
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current)
+    if (current instanceof Error && current.message) parts.push(current.message)
+    const rec = current as { cause?: unknown; code?: unknown }
+    if (typeof rec.code === 'string' && rec.code !== 'ERR_GENERIC_FAILURE') parts.push(rec.code)
+    current = rec.cause
+  }
+  return [...new Set(parts)].join(': ') || String(err)
+}
+
 function sendError(res: express.Response, err: unknown, status = 500) {
   if (isOidcReauthError(err) || isK8sUnauthorized(err)) {
     const message = isOidcReauthError(err) ? err.message : OIDC_REAUTH_MESSAGE
     res.status(401).json({ error: message, code: 'oidc_reauth' })
     return
   }
-  const message = err instanceof Error ? err.message : String(err)
+  const message = errorMessage(err)
   if (isK8sAccessDenied(err)) {
     res.status(403).json({ error: message, code: 'forbidden' })
     return
@@ -351,6 +367,33 @@ app.get('/api/configmaps', async (req, res) => {
     res.json((result.items ?? []).map(mapConfigMap))
   } catch (err) {
     sendEmptyIfDenied(res, err)
+  }
+})
+
+app.get('/api/configmaps/:namespace/:name', async (req, res) => {
+  try {
+    const context = await k8sAuthFromReq(req, res)
+    res.json(await getConfigMapDetail(context, req.params.namespace, req.params.name))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.put('/api/configmaps/:namespace/:name', async (req, res) => {
+  try {
+    const context = await k8sAuthFromReq(req, res)
+    const yaml = typeof req.body?.yaml === 'string' ? req.body.yaml : ''
+    if (!yaml.trim()) {
+      res.status(400).json({ error: 'YAML пустой' })
+      return
+    }
+    res.json(await applyConfigMapYaml(context, req.params.namespace, req.params.name, yaml))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const status = /Некорректный YAML|не совпадает|Ожидался kind|YAML должен|пустой/i.test(message)
+      ? 400
+      : 500
+    sendError(res, err, status)
   }
 })
 

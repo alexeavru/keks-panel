@@ -53,8 +53,8 @@ function clusterConnectMessage(error: string | null): string | null {
   if (/HTTP-Code:\s*401|\bUnauthorized\b|oidc_reauth|не принял OIDC|истёк|Нет OIDC/i.test(error)) {
     return 'Кластер не принял OIDC-токен. Выйдите и войдите через SSO снова.'
   }
-  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|connect ECONN/i.test(error)) {
-    return 'Панель в Docker не достучалась до Kubernetes API. Адрес 127.0.0.1 из kubeconfig указывает на сам контейнер, а не на kind. Пересоберите compose или задайте K8S_API_SERVER=https://host.docker.internal:<порт kind>.'
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|connect ECONN|fetch failed|Failed to fetch/i.test(error)) {
+    return 'Не удалось достучаться до Kubernetes API. SSO ходит в kind (контекст kind-keks), а не в текущий kubectl context. Проверьте, что kind запущен, и войдите через SSO снова.'
   }
   return error
 }
@@ -80,13 +80,13 @@ function persistNavOpen(key: string, open: boolean) {
 
 function navClass(isActive: boolean) {
   return `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
-    isActive ? 'bg-ink-900 text-ink-50' : 'text-ink-700 hover:bg-ink-100/80'
+    isActive ? 'bg-ink-700 text-ink-50' : 'text-ink-700 hover:bg-ink-100/80'
   }`
 }
 
 function childNavClass(isActive: boolean) {
   return `flex items-center rounded-lg px-3 py-2 text-sm font-medium transition ${
-    isActive ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-700 hover:bg-white/70'
+    isActive ? 'bg-ink-700 text-ink-50' : 'text-ink-700 hover:bg-ink-100/80'
   }`
 }
 
@@ -251,7 +251,7 @@ export function AppShell() {
               KEKS
             </p>
             <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">
-              panel · 0.4.1
+              panel · 0.4.2
             </p>
           </div>
 

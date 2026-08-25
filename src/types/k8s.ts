@@ -197,6 +197,12 @@ export interface ConfigMap {
   metadata: K8sObjectMeta
   data: Record<string, string>
   binaryDataKeys: string[]
+  immutable?: boolean
+}
+
+export interface ConfigMapDetail {
+  info: ConfigMap
+  yaml: string
 }
 
 export interface Secret {

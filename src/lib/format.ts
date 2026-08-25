@@ -9,6 +9,11 @@ export function formatAge(iso: string): string {
   return `${days}д`
 }
 
+export function formatAgeAgo(iso: string): string {
+  const age = formatAge(iso)
+  return age === 'сейчас' ? 'сейчас' : `${age} назад`
+}
+
 export function shortHost(host: string): string {
   try {
     const url = new URL(host)

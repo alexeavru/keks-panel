@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { Box, Boxes, Database, FileCode, Globe, HardDrive, KeyRound, Layers, Network, Server } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
 import { fetchSnapshot } from '@/lib/k8s-client'
-import { formatAge, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
+import { formatAgeAgo, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { PodsUsageCharts } from '@/components/PodsUsageCharts'
 import { TopNamespaces } from '@/components/TopNamespaces'
@@ -40,7 +40,7 @@ export function OverviewPage() {
           storageClasses: [],
           nodes: [],
           info: {
-            name: connection.name,
+            name: connection.context || connection.host || connection.name,
             context: connection.context ?? 'oidc',
             server: connection.host,
             user: connection.name,
@@ -139,14 +139,29 @@ export function OverviewPage() {
       ]
     : []
 
+  const clusterName = snap?.info.name || connection?.context || connection?.host
+  const clusterVersion = snap?.info.version && snap.info.version !== '—' ? snap.info.version : ''
+
   return (
     <div>
       <PageHeader
         title="Обзор кластера"
         description={
-          connection
-            ? `${connection.name} · подключено ${formatAge(connection.connectedAt)} назад`
-            : undefined
+          clusterName || connection ? (
+            <p className="mt-1 text-sm text-ink-500">
+              {clusterName ? <span className="font-bold text-ink-800">{clusterName}</span> : null}
+              {clusterName && clusterVersion ? (
+                <>
+                  {' '}
+                  <span className="font-bold text-ink-800">· {clusterVersion}</span>
+                </>
+              ) : null}
+              {(clusterName || clusterVersion) && connection ? (
+                <span className="font-normal text-ink-500"> · </span>
+              ) : null}
+              {connection ? `подключено ${formatAgeAgo(connection.connectedAt)}` : null}
+            </p>
+          ) : undefined
         }
       />
 
@@ -206,7 +221,7 @@ export function OverviewPage() {
               },
               {
                 label: 'Подключено',
-                value: connection ? `${formatAge(connection.connectedAt)} назад` : '—',
+                value: connection ? formatAgeAgo(connection.connectedAt) : '—',
               },
             ].map((row) => (
               <div key={row.label} className="min-w-0 rounded-lg bg-ink-50 px-3.5 py-3">

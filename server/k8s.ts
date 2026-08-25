@@ -26,6 +26,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import https from 'node:https'
 import type { RequestOptions } from 'node:https'
+import { dump, load } from 'js-yaml'
 
 export interface KubeContextInfo {
   name: string
@@ -125,6 +126,47 @@ function jwtPayload(token: string): { email?: string; name?: string; sub?: strin
   }
 }
 
+function isLoopbackServer(server?: string): boolean {
+  if (!server) return false
+  try {
+    const host = new URL(server).hostname
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === 'host.docker.internal'
+  } catch {
+    return false
+  }
+}
+
+function oidcClusterFromKubeconfig(): {
+  server: string
+  skipTLSVerify?: boolean
+  caData?: string
+  caFile?: string
+  name: string
+} {
+  const kc = loadKubeConfig()
+  const clusters = new Map(kc.clusters.map((cluster) => [cluster.name, cluster]))
+  const preferred = [
+    process.env.K8S_CONTEXT?.trim(),
+    'kind-keks',
+    kc.getCurrentContext(),
+  ].filter((name): name is string => Boolean(name))
+
+  for (const name of preferred) {
+    const ctx = kc.contexts.find((item) => item.name === name)
+    const cluster = ctx ? clusters.get(ctx.cluster) : clusters.get(name)
+    if (cluster?.server) return cluster
+  }
+
+  const loopback = kc.clusters.find((cluster) => isLoopbackServer(cluster.server))
+  if (loopback?.server) return loopback
+
+  const current = kc.getCurrentCluster()
+  if (current?.server) return current
+  throw new Error(
+    'Для SSO задайте K8S_API_SERVER / K8S_CONTEXT или kubeconfig с контекстом kind-keks',
+  )
+}
+
 function oidcClusterEndpoint(): {
   server: string
   skipTLSVerify: boolean
@@ -142,16 +184,10 @@ function oidcClusterEndpoint(): {
     return { server: rewriteKubeServer(server), skipTLSVerify: skip || rewriteLoopback(), caData, caFile, name: 'oidc' }
   }
 
-  const kc = loadKubeConfig()
-  const cluster = kc.getCurrentCluster()
-  if (!cluster?.server) {
-    throw new Error(
-      'Для Dex задайте K8S_API_SERVER (или kubeconfig с cluster.server только для адреса API)',
-    )
-  }
+  const cluster = oidcClusterFromKubeconfig()
   return {
     server: rewriteKubeServer(cluster.server),
-    skipTLSVerify: skip || rewriteLoopback() || Boolean(cluster.skipTLSVerify),
+    skipTLSVerify: skip || rewriteLoopback() || Boolean(cluster.skipTLSVerify) || isLoopbackServer(cluster.server),
     caData: cluster.caData,
     caFile: cluster.caFile,
     name: cluster.name,
@@ -577,7 +613,6 @@ export async function applyPodYaml(
   name: string,
   yaml: string,
 ) {
-  const { load } = await import('js-yaml')
   let parsed: unknown
   try {
     parsed = coerceYamlTypes(load(yaml))
@@ -626,7 +661,6 @@ export async function applyDeploymentYaml(
   name: string,
   yaml: string,
 ) {
-  const { load } = await import('js-yaml')
   let parsed: unknown
   try {
     parsed = coerceYamlTypes(load(yaml))
@@ -733,60 +767,30 @@ function mapContainer(
   }
 }
 
-function toYaml(value: unknown, indent = 0): string {
-  const pad = '  '.repeat(indent)
-  if (value === null || value === undefined) return `${pad}null`
-  if (typeof value === 'string') {
-    if (value.includes('\n')) {
-      return [`${pad}|`, ...value.split('\n').map((line) => `${pad}  ${line}`)].join('\n')
-    }
-    if (
-      value === '' ||
-      /[:#{}[\],&*!|>'%@`]/.test(value) ||
-      /^\s|\s$/.test(value) ||
-      /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value) ||
-      /^(?:[Tt]rue|[Ff]alse|[Yy]es|[Nn]o|[Oo]n|[Oo]ff|[Nn]ull|~)$/.test(value)
-    ) {
-      return `${pad}${JSON.stringify(value)}`
-    }
-    return `${pad}${value}`
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') return `${pad}${value}`
-  if (Array.isArray(value)) {
-    if (value.length === 0) return `${pad}[]`
-    return value
-      .map((item) => {
-        if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
-          const inner = toYaml(item, indent + 1)
-          const [first, ...rest] = inner.split('\n')
-          const firstLine = first.replace(/^\s+/, '')
-          return [`${pad}- ${firstLine}`, ...rest].join('\n')
-        }
-        const inner = toYaml(item, 0).trim()
-        return `${pad}- ${inner}`
-      })
-      .join('\n')
-  }
-  if (typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined)
-    if (entries.length === 0) return `${pad}{}`
-    return entries
-      .map(([key, val]) => {
-        if (val !== null && typeof val === 'object') {
-          return `${pad}${key}:\n${toYaml(val, indent + 1)}`
-        }
-        return `${pad}${key}: ${toYaml(val, 0).trim()}`
-      })
-      .join('\n')
-  }
-  return `${pad}${String(value)}`
+function toYaml(value: unknown): string {
+  return dump(value, {
+    lineWidth: -1,
+    noRefs: true,
+    quoteStyle: 'double',
+  }).trimEnd()
 }
+
+const LAST_APPLIED = 'kubectl.kubernetes.io/last-applied-configuration'
 
 function sanitizeManifest(obj: unknown): unknown {
   const raw = JSON.parse(JSON.stringify(obj)) as {
     metadata?: Record<string, unknown>
   }
-  if (raw.metadata) delete raw.metadata.managedFields
+  if (raw.metadata) {
+    delete raw.metadata.managedFields
+    const annotations = raw.metadata.annotations
+    if (annotations && typeof annotations === 'object' && !Array.isArray(annotations)) {
+      const next = { ...(annotations as Record<string, unknown>) }
+      delete next[LAST_APPLIED]
+      if (Object.keys(next).length === 0) delete raw.metadata.annotations
+      else raw.metadata.annotations = next
+    }
+  }
   return raw
 }
 
@@ -1151,7 +1155,68 @@ export function mapConfigMap(cm: V1ConfigMap) {
     metadata: meta(cm),
     data: cm.data ?? {},
     binaryDataKeys: Object.keys(cm.binaryData ?? {}),
+    immutable: cm.immutable,
   }
+}
+
+export async function getConfigMapDetail(auth: K8sAuth | string, namespace: string, name: string) {
+  const { core } = getApis(auth)
+  const cm = await core.readNamespacedConfigMap({ name, namespace })
+  return {
+    info: mapConfigMap(cm),
+    yaml: `${toYaml(sanitizeManifest(cm))}\n`,
+  }
+}
+
+export async function applyConfigMapYaml(
+  auth: K8sAuth | string,
+  namespace: string,
+  name: string,
+  yaml: string,
+) {
+  let parsed: unknown
+  try {
+    parsed = coerceYamlTypes(load(yaml))
+  } catch (err) {
+    throw new Error(`Некорректный YAML: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('YAML должен содержать объект ConfigMap')
+  }
+  const body = parsed as V1ConfigMap
+  const kind = (body as { kind?: string }).kind
+  if (kind && kind !== 'ConfigMap') {
+    throw new Error(`Ожидался kind: ConfigMap, получен ${kind}`)
+  }
+  const metaName = body.metadata?.name
+  const metaNs = body.metadata?.namespace
+  if (metaName && metaName !== name) {
+    throw new Error(`Имя в YAML (${metaName}) не совпадает с configmap ${name}`)
+  }
+  if (metaNs && metaNs !== namespace) {
+    throw new Error(`Namespace в YAML (${metaNs}) не совпадает с ${namespace}`)
+  }
+  body.apiVersion = body.apiVersion || 'v1'
+  body.kind = 'ConfigMap'
+  body.metadata = {
+    ...body.metadata,
+    name,
+    namespace,
+  }
+  if (body.metadata && 'managedFields' in body.metadata) {
+    delete (body.metadata as { managedFields?: unknown }).managedFields
+  }
+  if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
+    body.data = stringifyLabelMap(body.data)
+  }
+
+  const { core } = getApis(auth)
+  try {
+    await core.replaceNamespacedConfigMap({ name, namespace, body })
+  } catch (err) {
+    throw new Error(k8sErrorMessage(err))
+  }
+  return getConfigMapDetail(auth, namespace, name)
 }
 
 export function mapSecret(secret: V1Secret) {

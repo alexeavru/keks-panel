@@ -9,6 +9,7 @@ import type {
   Service,
   Ingress,
   ConfigMap,
+  ConfigMapDetail,
   Secret,
   PersistentVolume,
   PersistentVolumeClaim,
@@ -298,6 +299,31 @@ export async function listConfigMaps(
 ): Promise<ConfigMap[]> {
   return api(withContext('/api/configmaps', connection, namespace), {
     headers: contextHeaders(connection),
+  })
+}
+
+export async function fetchConfigMapDetail(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+): Promise<ConfigMapDetail> {
+  const path = `/api/configmaps/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+  return api(withContext(path, connection), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function saveConfigMapYaml(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+  yaml: string,
+): Promise<ConfigMapDetail> {
+  const path = `/api/configmaps/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+  return api(withContext(path, connection), {
+    method: 'PUT',
+    headers: contextHeaders(connection),
+    body: JSON.stringify({ yaml }),
   })
 }
 

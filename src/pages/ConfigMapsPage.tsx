@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useCluster } from '@/context/ClusterContext'
 import { listConfigMaps } from '@/lib/k8s-client'
 import { formatAge } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { SearchInput } from '@/components/SearchInput'
 import { ResourceTable, type Column } from '@/components/ResourceTable'
-import { ResourceDrawer } from '@/components/ResourceDrawer'
+import { ConfigMapDetails } from '@/components/ConfigMapDetails'
 import type { ConfigMap } from '@/types/k8s'
+
+const POLL_MS = 5000
 
 function configMapKeys(row: ConfigMap): string[] {
   return [...Object.keys(row.data), ...row.binaryDataKeys]
@@ -14,23 +17,39 @@ function configMapKeys(row: ConfigMap): string[] {
 
 export function ConfigMapsPage() {
   const { connection, namespace: ns } = useCluster()
+  const location = useLocation()
   const [items, setItems] = useState<ConfigMap[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<ConfigMap | null>(null)
 
-  const load = async () => {
+  const load = async (silent = false) => {
     if (!connection) return
-    setLoading(true)
+    if (!silent) setLoading(true)
     try {
       setItems(await listConfigMaps(connection))
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
+  const resetAt = (location.state as { reset?: number } | null)?.reset
+
+  useEffect(() => {
+    setSelected(null)
+  }, [location.key, resetAt, ns])
+
+  useEffect(() => {
+    setSelected((prev) => {
+      if (!prev) return prev
+      return items.find((c) => c.metadata.uid === prev.metadata.uid) ?? prev
+    })
+  }, [items])
+
   useEffect(() => {
     void load()
+    const id = window.setInterval(() => void load(true), POLL_MS)
+    return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection])
 
@@ -94,6 +113,10 @@ export function ConfigMapsPage() {
     },
   ]
 
+  if (selected) {
+    return <ConfigMapDetails configMap={selected} onBack={() => setSelected(null)} />
+  }
+
   return (
     <div>
       <PageHeader
@@ -107,13 +130,6 @@ export function ConfigMapsPage() {
         rowKey={(r) => r.metadata.uid}
         loading={loading}
         onRowClick={setSelected}
-      />
-      <ResourceDrawer
-        open={!!selected}
-        title={selected?.metadata.name ?? ''}
-        subtitle={`ConfigMap · ${selected?.metadata.namespace ?? ''}`}
-        resource={selected}
-        onClose={() => setSelected(null)}
       />
     </div>
   )
