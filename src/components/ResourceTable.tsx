@@ -121,23 +121,24 @@ export function ResourceTable<T>({
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map((row) => (
-              <tr
-                key={rowKey(row)}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                className={`border-b border-ink-100 last:border-0 ${
-                  onRowClick
-                    ? 'cursor-pointer transition hover:bg-leaf-500/[0.06]'
-                    : ''
-                } ${rowClassName?.(row) ?? ''}`}
-              >
-                {columns.map((col) => (
-                  <td key={col.key} className={`px-4 py-3 align-middle ${col.className ?? ''}`}>
-                    {col.render(row)}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {sortedRows.map((row) => {
+              const extra = rowClassName?.(row)
+              return (
+                <tr
+                  key={rowKey(row)}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  className={`border-b border-ink-100 last:border-0 ${
+                    onRowClick ? 'cursor-pointer transition' : ''
+                  } ${extra ?? (onRowClick ? 'hover:bg-leaf-500/[0.06]' : '')}`}
+                >
+                  {columns.map((col) => (
+                    <td key={col.key} className={`px-4 py-3 align-middle ${col.className ?? ''}`}>
+                      {col.render(row)}
+                    </td>
+                  ))}
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

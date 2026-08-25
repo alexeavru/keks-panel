@@ -7,6 +7,7 @@ import {
   kubeconfigPath,
   listContexts,
   mapDeployment,
+  mapReplicaSet,
   mapStatefulSet,
   mapNamespace,
   mapNode,
@@ -27,6 +28,11 @@ import {
   applyDeploymentYaml,
   getDeploymentEvents,
   listDeploymentPods,
+  listDeploymentReplicaSets,
+  getReplicaSetDetail,
+  applyReplicaSetYaml,
+  getReplicaSetEvents,
+  listReplicaSetPods,
   getConfigMapDetail,
   applyConfigMapYaml,
   testContext,
@@ -287,6 +293,15 @@ app.get('/api/deployments/:namespace/:name/pods', async (req, res) => {
   }
 })
 
+app.get('/api/deployments/:namespace/:name/replicasets', async (req, res) => {
+  try {
+    const context = await k8sAuthFromReq(req, res)
+    res.json(await listDeploymentReplicaSets(context, req.params.namespace, req.params.name))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
 app.get('/api/deployments/:namespace/:name', async (req, res) => {
   try {
     const context = await k8sAuthFromReq(req, res)
@@ -305,6 +320,68 @@ app.put('/api/deployments/:namespace/:name', async (req, res) => {
       return
     }
     res.json(await applyDeploymentYaml(context, req.params.namespace, req.params.name, yaml))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const status = /Некорректный YAML|не совпадает|Ожидался kind|YAML должен|пустой/i.test(message)
+      ? 400
+      : 500
+    sendError(res, err, status)
+  }
+})
+
+app.get('/api/replicasets', async (req, res) => {
+  try {
+    const context = await k8sAuthFromReq(req, res)
+    const namespace = typeof req.query.namespace === 'string' ? req.query.namespace : ''
+    const { apps } = getApis(context)
+    const result = namespace
+      ? await apps.listNamespacedReplicaSet({ namespace })
+      : await apps.listReplicaSetForAllNamespaces()
+    res.json((result.items ?? []).map(mapReplicaSet))
+  } catch (err) {
+    sendEmptyIfDenied(res, err)
+  }
+})
+
+app.get('/api/replicasets/:namespace/:name/events', async (req, res) => {
+  try {
+    const context = await k8sAuthFromReq(req, res)
+    const uid = typeof req.query.uid === 'string' ? req.query.uid : ''
+    res.json(
+      await getReplicaSetEvents(context, req.params.namespace, req.params.name, uid || undefined),
+    )
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/replicasets/:namespace/:name/pods', async (req, res) => {
+  try {
+    const context = await k8sAuthFromReq(req, res)
+    res.json(await listReplicaSetPods(context, req.params.namespace, req.params.name))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.get('/api/replicasets/:namespace/:name', async (req, res) => {
+  try {
+    const context = await k8sAuthFromReq(req, res)
+    res.json(await getReplicaSetDetail(context, req.params.namespace, req.params.name))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+app.put('/api/replicasets/:namespace/:name', async (req, res) => {
+  try {
+    const context = await k8sAuthFromReq(req, res)
+    const yaml = typeof req.body?.yaml === 'string' ? req.body.yaml : ''
+    if (!yaml.trim()) {
+      res.status(400).json({ error: 'YAML пустой' })
+      return
+    }
+    res.json(await applyReplicaSetYaml(context, req.params.namespace, req.params.name, yaml))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     const status = /Некорректный YAML|не совпадает|Ожидался kind|YAML должен|пустой/i.test(message)

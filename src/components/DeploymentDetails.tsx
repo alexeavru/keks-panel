@@ -5,21 +5,24 @@ import {
   fetchDeploymentDetail,
   fetchDeploymentEvents,
   listDeploymentPods,
+  listDeploymentReplicaSets,
   saveDeploymentYaml,
 } from '@/lib/k8s-client'
-import { formatAge, formatCpuMillis, formatMemoryMi, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
+import { formatAge, formatCreatedAt, formatCpuMillis, formatMemoryMi, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
 import { GroupedNumber } from '@/components/GroupedNumber'
 import { StatusBadge, podPhaseTone } from '@/components/StatusBadge'
 import { PanelUser } from '@/components/PanelUser'
 import { PodDetails } from '@/components/PodDetails'
+import { ReplicaSetDetails } from '@/components/ReplicaSetDetails'
 import { ResourceTable, type Column } from '@/components/ResourceTable'
-import type { Deployment, DeploymentDetail, Pod, PodEvent } from '@/types/k8s'
+import type { Deployment, DeploymentDetail, Pod, PodEvent, ReplicaSet } from '@/types/k8s'
 
-type Tab = 'info' | 'yaml' | 'pods' | 'events'
+type Tab = 'info' | 'yaml' | 'replicasets' | 'pods' | 'events'
 
 const tabs: { id: Tab; label: string }[] = [
   { id: 'info', label: 'Сведения' },
   { id: 'yaml', label: 'YAML' },
+  { id: 'replicasets', label: 'ReplicaSets' },
   { id: 'pods', label: 'Pods' },
   { id: 'events', label: 'Events' },
 ]
@@ -42,6 +45,10 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
   const [podsError, setPodsError] = useState<string | null>(null)
   const [podsLoading, setPodsLoading] = useState(false)
   const [selectedPod, setSelectedPod] = useState<Pod | null>(null)
+  const [replicaSets, setReplicaSets] = useState<ReplicaSet[]>([])
+  const [replicaSetsError, setReplicaSetsError] = useState<string | null>(null)
+  const [replicaSetsLoading, setReplicaSetsLoading] = useState(false)
+  const [selectedReplicaSet, setSelectedReplicaSet] = useState<ReplicaSet | null>(null)
   const [yamlText, setYamlText] = useState('')
   const [yamlDirty, setYamlDirty] = useState(false)
   const [yamlSaving, setYamlSaving] = useState(false)
@@ -65,6 +72,9 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
     setPods([])
     setPodsError(null)
     setSelectedPod(null)
+    setReplicaSets([])
+    setReplicaSetsError(null)
+    setSelectedReplicaSet(null)
     setYamlText('')
     setYamlDirty(false)
     setYamlSaving(false)
@@ -208,6 +218,38 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
     return () => window.clearInterval(id)
   }, [tab, selectedPod, loadPods, deployment.metadata.uid])
 
+  const loadReplicaSets = useCallback(
+    async (silent = false) => {
+      if (!connection || !ns || !name) return
+      if (!silent) {
+        setReplicaSetsLoading(true)
+        setReplicaSetsError(null)
+      }
+      try {
+        const next = await listDeploymentReplicaSets(connection, ns, name)
+        setReplicaSets(next)
+        setSelectedReplicaSet((prev) =>
+          prev ? (next.find((r) => r.metadata.uid === prev.metadata.uid) ?? prev) : prev,
+        )
+        setReplicaSetsError(null)
+      } catch (err) {
+        if (!silent) {
+          setReplicaSetsError(err instanceof Error ? err.message : 'Не удалось загрузить replicaset')
+        }
+      } finally {
+        if (!silent) setReplicaSetsLoading(false)
+      }
+    },
+    [connection, ns, name],
+  )
+
+  useEffect(() => {
+    if (tab !== 'replicasets' && !selectedReplicaSet) return
+    void loadReplicaSets()
+    const id = window.setInterval(() => void loadReplicaSets(true), 5000)
+    return () => window.clearInterval(id)
+  }, [tab, selectedReplicaSet, loadReplicaSets, deployment.metadata.uid])
+
   const facts: { label: string; value: string }[] = [
     { label: 'Name', value: deployment.metadata.name },
     { label: 'Namespace', value: deployment.metadata.namespace ?? '—' },
@@ -319,6 +361,77 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
       ),
     },
   ]
+
+  const replicaSetColumns: Column<ReplicaSet>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      render: (row) => (
+        <span className={`font-medium ${row.spec.replicas === 0 ? 'text-ink-400' : 'text-ink-900'}`}>
+          {row.metadata.name}
+        </span>
+      ),
+    },
+    {
+      key: 'ready',
+      header: 'Ready',
+      render: (row) => {
+        const inactive = row.spec.replicas === 0
+        const ok = row.status.readyReplicas >= row.spec.replicas
+        return (
+          <div className="flex items-center gap-2">
+            <span className={`font-mono text-xs ${inactive ? 'text-ink-400' : ''}`}>
+              {row.status.readyReplicas}/{row.spec.replicas}
+            </span>
+            <span className={inactive ? 'opacity-50' : undefined}>
+              <StatusBadge tone={ok ? 'ok' : 'warn'}>{ok ? 'Ready' : 'Progressing'}</StatusBadge>
+            </span>
+          </div>
+        )
+      },
+    },
+    {
+      key: 'current',
+      header: 'Current',
+      render: (row) => (
+        <span className={`font-mono text-xs ${row.spec.replicas === 0 ? 'text-ink-400' : ''}`}>
+          {row.status.replicas}
+        </span>
+      ),
+    },
+    {
+      key: 'age',
+      header: 'Age',
+      render: (row) => (
+        <span className={`font-mono text-xs ${row.spec.replicas === 0 ? 'text-ink-400' : 'text-ink-500'}`}>
+          {formatAge(row.metadata.creationTimestamp)}
+        </span>
+      ),
+    },
+    {
+      key: 'created',
+      header: 'Created',
+      className: 'w-px whitespace-nowrap',
+      render: (row) => (
+        <span className={`font-mono text-xs ${row.spec.replicas === 0 ? 'text-ink-400' : 'text-ink-500'}`}>
+          {formatCreatedAt(row.metadata.creationTimestamp)}
+        </span>
+      ),
+    },
+  ]
+
+  if (selectedReplicaSet) {
+    return (
+      <ReplicaSetDetails
+        replicaSet={selectedReplicaSet}
+        backLabel={name}
+        onBack={() => {
+          setSelectedReplicaSet(null)
+          setTab('replicasets')
+        }}
+      />
+    )
+  }
 
   if (selectedPod) {
     return (
@@ -518,6 +631,27 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
               className="min-h-[70vh] w-full resize-y rounded border border-ink-200 bg-ink-900 p-4 font-mono text-[13px] leading-relaxed text-white outline-none focus:border-leaf-500 focus:ring-2 focus:ring-leaf-500/20"
             />
           )}
+        </div>
+      )}
+
+      {tab === 'replicasets' && (
+        <div>
+          {replicaSetsError && (
+            <p className="mb-3 rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-500">
+              {replicaSetsError}
+            </p>
+          )}
+          <ResourceTable
+            columns={replicaSetColumns}
+            rows={replicaSets}
+            rowKey={(r) => r.metadata.uid}
+            loading={replicaSetsLoading && replicaSets.length === 0}
+            onRowClick={setSelectedReplicaSet}
+            empty="ReplicaSet этого deployment нет"
+            rowClassName={(r) =>
+              r.spec.replicas === 0 ? 'bg-ink-50 hover:bg-ink-100' : undefined
+            }
+          />
         </div>
       )}
 

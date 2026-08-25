@@ -2,6 +2,7 @@ export type ResourceKind =
   | 'Namespace'
   | 'Pod'
   | 'Deployment'
+  | 'ReplicaSet'
   | 'StatefulSet'
   | 'Service'
   | 'Ingress'
@@ -154,6 +155,36 @@ export interface DeploymentDetail {
   yaml: string
 }
 
+export interface ReplicaSet {
+  kind: 'ReplicaSet'
+  metadata: K8sObjectMeta
+  spec: {
+    replicas: number
+    selector: string
+  }
+  status: {
+    replicas: number
+    readyReplicas: number
+    availableReplicas: number
+    fullyLabeledReplicas: number
+  }
+  owner?: string
+}
+
+export interface ReplicaSetDetail {
+  info: ReplicaSet & {
+    spec: ReplicaSet['spec'] & {
+      minReadySeconds?: number
+    }
+    status: ReplicaSet['status'] & {
+      observedGeneration?: number
+    }
+    containers: { name: string; image: string }[]
+    conditions: PodConditionInfo[]
+  }
+  yaml: string
+}
+
 export interface StatefulSet {
   kind: 'StatefulSet'
   metadata: K8sObjectMeta
@@ -283,6 +314,7 @@ export type K8sResource =
   | Namespace
   | Pod
   | Deployment
+  | ReplicaSet
   | StatefulSet
   | Service
   | Ingress
@@ -297,6 +329,7 @@ export interface ClusterSnapshot {
   namespaces: Namespace[]
   pods: Pod[]
   deployments: Deployment[]
+  replicaSets: ReplicaSet[]
   statefulSets: StatefulSet[]
   services: Service[]
   ingresses: Ingress[]

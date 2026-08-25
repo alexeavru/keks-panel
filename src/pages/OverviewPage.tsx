@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Box, Boxes, Database, FileCode, Globe, HardDrive, KeyRound, Layers, Network, Server } from 'lucide-react'
+import { Box, Boxes, Copy, Database, FileCode, Globe, HardDrive, KeyRound, Layers, Network, Server } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
 import { fetchSnapshot } from '@/lib/k8s-client'
 import { formatAgeAgo, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
@@ -30,6 +30,7 @@ export function OverviewPage() {
           namespaces: [],
           pods: [],
           deployments: [],
+          replicaSets: [],
           statefulSets: [],
           services: [],
           ingresses: [],
@@ -91,6 +92,12 @@ export function OverviewPage() {
           value: snap.deployments.length,
           to: '/cluster/deployments',
           icon: Boxes,
+        },
+        {
+          label: 'ReplicaSets',
+          value: snap.replicaSets.length,
+          to: '/cluster/replicasets',
+          icon: Copy,
         },
         {
           label: 'StatefulSets',
@@ -178,7 +185,7 @@ export function OverviewPage() {
 
       <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {loading && !snap
-          ? Array.from({ length: 12 }).map((_, i) => (
+          ? Array.from({ length: 13 }).map((_, i) => (
               <div key={i} className="surface h-28 animate-pulse" />
             ))
           : cards.map(({ label, value, to, icon: Icon }) => (

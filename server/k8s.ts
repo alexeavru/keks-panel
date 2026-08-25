@@ -7,6 +7,7 @@ import {
   StorageV1Api,
   type PodMetric,
   type V1Deployment,
+  type V1ReplicaSet,
   type V1Ingress,
   type V1Namespace,
   type V1Node,
@@ -703,6 +704,54 @@ export async function applyDeploymentYaml(
   return getDeploymentDetail(auth, namespace, name)
 }
 
+export async function applyReplicaSetYaml(
+  auth: K8sAuth | string,
+  namespace: string,
+  name: string,
+  yaml: string,
+) {
+  let parsed: unknown
+  try {
+    parsed = coerceYamlTypes(load(yaml))
+  } catch (err) {
+    throw new Error(`Некорректный YAML: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('YAML должен содержать объект ReplicaSet')
+  }
+  const body = parsed as V1ReplicaSet
+  const kind = (body as { kind?: string }).kind
+  if (kind && kind !== 'ReplicaSet') {
+    throw new Error(`Ожидался kind: ReplicaSet, получен ${kind}`)
+  }
+  const metaName = body.metadata?.name
+  const metaNs = body.metadata?.namespace
+  if (metaName && metaName !== name) {
+    throw new Error(`Имя в YAML (${metaName}) не совпадает с replicaset ${name}`)
+  }
+  if (metaNs && metaNs !== namespace) {
+    throw new Error(`Namespace в YAML (${metaNs}) не совпадает с ${namespace}`)
+  }
+  body.apiVersion = body.apiVersion || 'apps/v1'
+  body.kind = 'ReplicaSet'
+  body.metadata = {
+    ...body.metadata,
+    name,
+    namespace,
+  }
+  if (body.metadata && 'managedFields' in body.metadata) {
+    delete (body.metadata as { managedFields?: unknown }).managedFields
+  }
+
+  const { apps } = getApis(auth)
+  try {
+    await apps.replaceNamespacedReplicaSet({ name, namespace, body })
+  } catch (err) {
+    throw new Error(k8sErrorMessage(err))
+  }
+  return getReplicaSetDetail(auth, namespace, name)
+}
+
 function containerState(status?: V1ContainerStatus): string {
   if (!status?.state) return 'Unknown'
   if (status.state.running) return 'Running'
@@ -1058,6 +1107,158 @@ export async function listDeploymentPods(auth: K8sAuth | string, namespace: stri
   )
 }
 
+export async function listDeploymentReplicaSets(
+  auth: K8sAuth | string,
+  namespace: string,
+  name: string,
+) {
+  const { apps } = getApis(auth)
+  const dep = await apps.readNamespacedDeployment({ name, namespace })
+  const uid = dep.metadata?.uid
+  const result = await apps.listNamespacedReplicaSet({ namespace })
+  return (result.items ?? [])
+    .filter((rs) =>
+      (rs.metadata?.ownerReferences ?? []).some(
+        (ref) => ref.kind === 'Deployment' && ((uid && ref.uid === uid) || ref.name === name),
+      ),
+    )
+    .map(mapReplicaSet)
+    .sort((a, b) => {
+      if (b.spec.replicas !== a.spec.replicas) return b.spec.replicas - a.spec.replicas
+      return Date.parse(b.metadata.creationTimestamp) - Date.parse(a.metadata.creationTimestamp)
+    })
+}
+
+function controllerOwner(obj: {
+  metadata?: { ownerReferences?: Array<{ kind?: string; name?: string; controller?: boolean }> }
+}): string {
+  const refs = obj.metadata?.ownerReferences ?? []
+  const owner = refs.find((r) => r.controller) ?? refs[0]
+  if (!owner?.kind || !owner.name) return ''
+  return `${owner.kind}/${owner.name}`
+}
+
+export function mapReplicaSet(rs: V1ReplicaSet) {
+  const selector = labelSelectorString(rs.spec?.selector)
+  return {
+    kind: 'ReplicaSet' as const,
+    metadata: meta(rs),
+    spec: {
+      replicas: rs.spec?.replicas ?? 0,
+      selector: selector || '—',
+    },
+    status: {
+      replicas: rs.status?.replicas ?? 0,
+      readyReplicas: rs.status?.readyReplicas ?? 0,
+      availableReplicas: rs.status?.availableReplicas ?? 0,
+      fullyLabeledReplicas: rs.status?.fullyLabeledReplicas ?? 0,
+    },
+    owner: controllerOwner(rs) || undefined,
+  }
+}
+
+function mapReplicaSetDetail(rs: V1ReplicaSet) {
+  const mapped = mapReplicaSet(rs)
+  const template = rs.spec?.template?.spec
+  const containers = [
+    ...(template?.initContainers ?? []).map((c) => ({
+      name: `${c.name} (init)`,
+      image: c.image ?? '',
+    })),
+    ...(template?.containers ?? []).map((c) => ({
+      name: c.name,
+      image: c.image ?? '',
+    })),
+  ]
+  return {
+    ...mapped,
+    spec: {
+      ...mapped.spec,
+      selector: labelSelectorString(rs.spec?.selector) || mapped.spec.selector,
+      minReadySeconds: rs.spec?.minReadySeconds,
+    },
+    status: {
+      ...mapped.status,
+      observedGeneration: rs.status?.observedGeneration,
+    },
+    containers,
+    conditions: (rs.status?.conditions ?? []).map((c) => ({
+      type: c.type ?? '',
+      status: c.status ?? '',
+      reason: c.reason,
+      message: c.message,
+    })),
+  }
+}
+
+export async function getReplicaSetDetail(auth: K8sAuth | string, namespace: string, name: string) {
+  const { apps } = getApis(auth)
+  const rs = await apps.readNamespacedReplicaSet({ name, namespace })
+  return {
+    info: mapReplicaSetDetail(rs),
+    yaml: `${toYaml(sanitizeManifest(rs))}\n`,
+  }
+}
+
+export async function getReplicaSetEvents(
+  auth: K8sAuth | string,
+  namespace: string,
+  name: string,
+  uid?: string,
+) {
+  const { core } = getApis(auth)
+  const selector = [
+    'involvedObject.kind=ReplicaSet',
+    `involvedObject.name=${name}`,
+    uid ? `involvedObject.uid=${uid}` : '',
+  ]
+    .filter(Boolean)
+    .join(',')
+  const result = await core.listNamespacedEvent({
+    namespace,
+    fieldSelector: selector,
+  })
+  const items = (result.items ?? []).map((ev) => {
+    const last =
+      eventIso(ev.lastTimestamp) ??
+      eventIso(ev.eventTime) ??
+      eventIso(ev.firstTimestamp) ??
+      eventIso(ev.metadata?.creationTimestamp)
+    const first = eventIso(ev.firstTimestamp) ?? eventIso(ev.eventTime)
+    const source = [ev.source?.component, ev.source?.host].filter(Boolean).join(' ')
+    return {
+      uid: ev.metadata?.uid ?? `${ev.reason ?? 'event'}:${last ?? ''}:${ev.message ?? ''}`,
+      type: ev.type ?? 'Normal',
+      reason: ev.reason ?? '—',
+      message: ev.message ?? '',
+      count: ev.count ?? ev.series?.count ?? 1,
+      firstTimestamp: first,
+      lastTimestamp: last,
+      source: source || ev.reportingComponent || '—',
+    }
+  })
+  items.sort((a, b) => {
+    const at = a.lastTimestamp ? Date.parse(a.lastTimestamp) : 0
+    const bt = b.lastTimestamp ? Date.parse(b.lastTimestamp) : 0
+    return bt - at
+  })
+  return items
+}
+
+export async function listReplicaSetPods(auth: K8sAuth | string, namespace: string, name: string) {
+  const { apps, core, metrics } = getApis(auth)
+  const rs = await apps.readNamespacedReplicaSet({ name, namespace })
+  const selector = labelSelectorString(rs.spec?.selector)
+  if (!selector) return []
+  const [podRes, usageMap] = await Promise.all([
+    core.listNamespacedPod({ namespace, labelSelector: selector }),
+    loadPodUsageMap(metrics, namespace),
+  ])
+  return (podRes.items ?? []).map((p) =>
+    mapPod(p, usageMap.get(podKey(p.metadata?.namespace, p.metadata?.name))),
+  )
+}
+
 export function mapDeployment(dep: V1Deployment) {
   const selector = labelSelectorString(dep.spec?.selector)
 
@@ -1338,6 +1539,7 @@ export async function fetchSnapshot(auth: K8sAuth | string) {
     namespaces,
     pods,
     deployments,
+    replicaSets,
     statefulSets,
     services,
     ingresses,
@@ -1353,6 +1555,7 @@ export async function fetchSnapshot(auth: K8sAuth | string) {
     optionalK8sList(() => core.listNamespace()),
     optionalK8sList(() => core.listPodForAllNamespaces()),
     optionalK8sList(() => apps.listDeploymentForAllNamespaces()),
+    optionalK8sList(() => apps.listReplicaSetForAllNamespaces()),
     optionalK8sList(() => apps.listStatefulSetForAllNamespaces()),
     optionalK8sList(() => core.listServiceForAllNamespaces()),
     optionalK8sList(() => net.listIngressForAllNamespaces()),
@@ -1384,6 +1587,7 @@ export async function fetchSnapshot(auth: K8sAuth | string) {
     namespaces: namespaces.map(mapNamespace),
     pods: pods.map((p) => mapPod(p, usageMap.get(podKey(p.metadata?.namespace, p.metadata?.name)))),
     deployments: deployments.map(mapDeployment),
+    replicaSets: replicaSets.map(mapReplicaSet),
     statefulSets: statefulSets.map(mapStatefulSet),
     services: services.map(mapService),
     ingresses: ingresses.map(mapIngress),

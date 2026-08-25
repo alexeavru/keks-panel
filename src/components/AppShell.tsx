@@ -26,6 +26,7 @@ const topNav = [
 const workloadNav = [
   { to: '/cluster/pods', label: 'Pods' },
   { to: '/cluster/deployments', label: 'Deployments' },
+  { to: '/cluster/replicasets', label: 'ReplicaSets' },
   { to: '/cluster/statefulsets', label: 'StatefulSets' },
   { to: '/cluster/configmaps', label: 'ConfigMaps' },
   { to: '/cluster/secrets', label: 'Secrets' },
@@ -251,7 +252,7 @@ export function AppShell() {
               KEKS
             </p>
             <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-500">
-              panel · 0.4.2
+              panel · 0.4.3
             </p>
           </div>
 

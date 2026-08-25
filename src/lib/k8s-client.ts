@@ -2,6 +2,8 @@ import type {
   ClusterConnection,
   ClusterSnapshot,
   Deployment,
+  ReplicaSet,
+  ReplicaSetDetail,
   KubeContextInfo,
   Namespace,
   Node,
@@ -261,6 +263,76 @@ export async function listDeploymentPods(
   name: string,
 ): Promise<Pod[]> {
   const path = `/api/deployments/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/pods`
+  return api(withContext(path, connection), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listDeploymentReplicaSets(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+): Promise<ReplicaSet[]> {
+  const path = `/api/deployments/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/replicasets`
+  return api(withContext(path, connection), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listReplicaSets(
+  connection: ClusterConnection,
+  namespace?: string,
+): Promise<ReplicaSet[]> {
+  return api(withContext('/api/replicasets', connection, namespace), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function fetchReplicaSetDetail(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+): Promise<ReplicaSetDetail> {
+  const path = `/api/replicasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+  return api(withContext(path, connection), {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function saveReplicaSetYaml(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+  yaml: string,
+): Promise<ReplicaSetDetail> {
+  const path = `/api/replicasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+  return api(withContext(path, connection), {
+    method: 'PUT',
+    headers: contextHeaders(connection),
+    body: JSON.stringify({ yaml }),
+  })
+}
+
+export async function fetchReplicaSetEvents(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+  uid?: string,
+): Promise<PodEvent[]> {
+  const path = `/api/replicasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/events`
+  const url = new URL(withContext(path, connection), window.location.origin)
+  if (uid) url.searchParams.set('uid', uid)
+  return api(url.pathname + url.search, {
+    headers: contextHeaders(connection),
+  })
+}
+
+export async function listReplicaSetPods(
+  connection: ClusterConnection,
+  namespace: string,
+  name: string,
+): Promise<Pod[]> {
+  const path = `/api/replicasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/pods`
   return api(withContext(path, connection), {
     headers: contextHeaders(connection),
   })

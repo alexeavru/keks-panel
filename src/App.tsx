@@ -8,6 +8,7 @@ import { OverviewPage } from '@/pages/OverviewPage'
 import { NamespacesPage } from '@/pages/NamespacesPage'
 import { PodsPage } from '@/pages/PodsPage'
 import { DeploymentsPage } from '@/pages/DeploymentsPage'
+import { ReplicaSetsPage } from '@/pages/ReplicaSetsPage'
 import { StatefulSetsPage } from '@/pages/StatefulSetsPage'
 import { ServicesPage } from '@/pages/ServicesPage'
 import { IngressesPage } from '@/pages/IngressesPage'
@@ -66,6 +67,7 @@ export default function App() {
               <Route path="nodes" element={<NodesPage />} />
               <Route path="pods" element={<PodsPage />} />
               <Route path="deployments" element={<DeploymentsPage />} />
+              <Route path="replicasets" element={<ReplicaSetsPage />} />
               <Route path="statefulsets" element={<StatefulSetsPage />} />
               <Route path="services" element={<ServicesPage />} />
               <Route path="ingresses" element={<IngressesPage />} />
