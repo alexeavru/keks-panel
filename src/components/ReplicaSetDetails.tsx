@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronRight, Columns2, X } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
 import {
   fetchReplicaSetDetail,
   fetchReplicaSetEvents,
+  listNamespaces,
   listReplicaSetPods,
+  listReplicaSets,
   saveReplicaSetYaml,
 } from '@/lib/k8s-client'
 import { formatAge, formatCpuMillis, formatMemoryMi, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
 import { GroupedNumber } from '@/components/GroupedNumber'
 import { StatusBadge, podPhaseTone } from '@/components/StatusBadge'
+import { SearchInput } from '@/components/SearchInput'
+import { NamespaceFilter } from '@/components/NamespaceFilter'
 import { PanelUser } from '@/components/PanelUser'
 import { PodDetails } from '@/components/PodDetails'
 import { ResourceTable, type Column } from '@/components/ResourceTable'
@@ -28,9 +32,147 @@ interface ReplicaSetDetailsProps {
   replicaSet: ReplicaSet
   onBack: () => void
   backLabel?: string
+  allowSplit?: boolean
+  showUser?: boolean
+  onCloseSplit?: () => void
 }
 
-export function ReplicaSetDetails({ replicaSet, onBack, backLabel = 'ReplicaSets' }: ReplicaSetDetailsProps) {
+function SecondReplicaSetPicker({
+  excludeUid,
+  onSelect,
+  onClose,
+}: {
+  excludeUid: string
+  onSelect: (replicaSet: ReplicaSet) => void
+  onClose: () => void
+}) {
+  const { connection, namespace: clusterNs } = useCluster()
+  const [items, setItems] = useState<ReplicaSet[]>([])
+  const [namespaces, setNamespaces] = useState<string[]>([])
+  const [filterNs, setFilterNs] = useState(clusterNs ?? '')
+  const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    setFilterNs(clusterNs ?? '')
+  }, [clusterNs])
+
+  useEffect(() => {
+    if (!connection) return
+    let cancelled = false
+    setLoading(true)
+    void Promise.all([
+      listReplicaSets(connection),
+      listNamespaces(connection).catch(() => [] as { metadata: { name: string } }[]),
+    ])
+      .then(([all, nsItems]) => {
+        if (cancelled) return
+        const sets = all.filter((r) => r.metadata.uid !== excludeUid)
+        setItems(sets)
+        const fromList = nsItems.map((n) => n.metadata.name)
+        const fromSets = sets
+          .map((r) => r.metadata.namespace)
+          .filter((name): name is string => Boolean(name))
+        setNamespaces([...new Set([...fromList, ...fromSets])].sort())
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [connection, excludeUid])
+
+  const rows = useMemo(() => {
+    let list = filterNs ? items.filter((r) => r.metadata.namespace === filterNs) : items
+    const q = query.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (r) =>
+          r.metadata.name.toLowerCase().includes(q) ||
+          (r.metadata.namespace ?? '').toLowerCase().includes(q) ||
+          (r.owner ?? '').toLowerCase().includes(q),
+      )
+    }
+    return list
+  }, [items, filterNs, query])
+
+  return (
+    <div>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl font-bold tracking-tight text-ink-900">Второй ReplicaSet</h1>
+          <p className="mt-1 text-sm text-ink-500">Выбор ReplicaSet</p>
+        </div>
+        <button
+          type="button"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ink-300 bg-white text-ink-500 transition hover:bg-ink-50 hover:text-ink-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500"
+          title="Закрыть второе окно"
+          aria-label="Закрыть второе окно"
+          onClick={onClose}
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="min-w-[180px] sm:max-w-[240px]">
+          <NamespaceFilter namespaces={namespaces} value={filterNs} onChange={setFilterNs} />
+        </div>
+        <SearchInput value={query} onChange={setQuery} placeholder="Имя…" />
+      </div>
+      {loading ? (
+        <p className="font-mono text-sm text-ink-500">Загрузка ReplicaSet…</p>
+      ) : rows.length === 0 ? (
+        <p className="font-mono text-sm text-ink-500">Подходящих ReplicaSet нет</p>
+      ) : (
+        <ul className="divide-y divide-ink-100 overflow-hidden rounded border border-ink-200 bg-white/70">
+          {rows.map((r) => {
+            const ok = r.status.readyReplicas >= r.spec.replicas
+            const inactive = r.spec.replicas === 0
+            return (
+              <li key={r.metadata.uid} className={inactive ? 'bg-ink-50' : undefined}>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-leaf-500/[0.06]"
+                  onClick={() => onSelect(r)}
+                >
+                  <span className="min-w-0">
+                    <span
+                      className={`block truncate font-medium ${inactive ? 'text-ink-400' : 'text-ink-900'}`}
+                    >
+                      {r.metadata.name}
+                    </span>
+                    <span className={`font-mono text-[11px] ${inactive ? 'text-ink-400' : 'text-ink-500'}`}>
+                      {r.metadata.namespace}
+                      {r.owner ? ` · ${r.owner}` : ''}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className={`font-mono text-xs ${inactive ? 'text-ink-400' : 'text-ink-600'}`}>
+                      {r.status.readyReplicas}/{r.spec.replicas}
+                    </span>
+                    <span className={inactive ? 'opacity-50' : undefined}>
+                      <StatusBadge tone={ok ? 'ok' : 'warn'}>{ok ? 'Ready' : 'Progressing'}</StatusBadge>
+                    </span>
+                  </span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+export function ReplicaSetDetails({
+  replicaSet,
+  onBack,
+  backLabel = 'ReplicaSets',
+  allowSplit = true,
+  showUser = true,
+  onCloseSplit,
+}: ReplicaSetDetailsProps) {
   const { connection } = useCluster()
   const [tab, setTab] = useState<Tab>('info')
   const [detail, setDetail] = useState<ReplicaSetDetail | null>(null)
@@ -48,6 +190,8 @@ export function ReplicaSetDetails({ replicaSet, onBack, backLabel = 'ReplicaSets
   const [yamlSaving, setYamlSaving] = useState(false)
   const [yamlError, setYamlError] = useState<string | null>(null)
   const [yamlSaved, setYamlSaved] = useState(false)
+  const [splitOpen, setSplitOpen] = useState(false)
+  const [secondReplicaSet, setSecondReplicaSet] = useState<ReplicaSet | null>(null)
   const detailRequestId = useRef(0)
 
   const ns = replicaSet.metadata.namespace ?? ''
@@ -71,6 +215,8 @@ export function ReplicaSetDetails({ replicaSet, onBack, backLabel = 'ReplicaSets
     setYamlSaving(false)
     setYamlError(null)
     setYamlSaved(false)
+    setSplitOpen(false)
+    setSecondReplicaSet(null)
   }, [replicaSet.metadata.uid])
 
   const loadDetail = useCallback(
@@ -323,11 +469,14 @@ export function ReplicaSetDetails({ replicaSet, onBack, backLabel = 'ReplicaSets
           setSelectedPod(null)
           setTab('pods')
         }}
+        allowSplit={allowSplit}
+        showUser={showUser}
+        onCloseSplit={onCloseSplit}
       />
     )
   }
 
-  return (
+  const pane = (
     <div>
       <nav className="mb-3 flex items-center gap-1.5 font-mono text-xs text-ink-500">
         <button
@@ -351,24 +500,66 @@ export function ReplicaSetDetails({ replicaSet, onBack, backLabel = 'ReplicaSets
           </div>
           <p className="mt-1 font-mono text-sm text-ink-500">{replicaSet.metadata.namespace}</p>
         </div>
-        <PanelUser />
+        {showUser ? (
+          <PanelUser />
+        ) : onCloseSplit ? (
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ink-300 bg-white text-ink-500 transition hover:bg-ink-50 hover:text-ink-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500"
+            title="Закрыть второе окно"
+            aria-label="Закрыть второе окно"
+            onClick={onCloseSplit}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
 
-      <div className="mb-6 flex gap-1 border-b border-ink-200">
-        {tabs.map((item) => (
+      <div className="mb-6 flex items-end justify-between gap-2 border-b border-ink-200">
+        <div className="flex gap-1">
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`-mb-px border-b-2 px-3 py-2 text-base font-medium transition ${
+                tab === item.id
+                  ? 'border-leaf-600 text-ink-900'
+                  : 'border-transparent text-ink-500 hover:text-ink-800'
+              }`}
+              onClick={() => setTab(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        {allowSplit ? (
           <button
-            key={item.id}
             type="button"
-            className={`-mb-px border-b-2 px-3 py-2 text-base font-medium transition ${
-              tab === item.id
-                ? 'border-leaf-600 text-ink-900'
-                : 'border-transparent text-ink-500 hover:text-ink-800'
+            className={`mb-1 inline-flex h-8 w-8 items-center justify-center rounded-lg border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500 ${
+              splitOpen
+                ? 'border-leaf-500/50 bg-leaf-400/10 text-leaf-700'
+                : 'border-ink-300 bg-white text-ink-500 hover:bg-ink-50 hover:text-ink-800'
             }`}
-            onClick={() => setTab(item.id)}
+            title={splitOpen ? 'Закрыть второе окно' : 'Открыть второе окно'}
+            aria-label={splitOpen ? 'Закрыть второе окно' : 'Открыть второе окно'}
+            aria-pressed={splitOpen}
+            onClick={() => {
+              if (splitOpen) {
+                setSplitOpen(false)
+                setSecondReplicaSet(null)
+              } else {
+                setSplitOpen(true)
+              }
+            }}
           >
-            {item.label}
+            <span className="relative inline-flex">
+              <Columns2 className="h-4 w-4" />
+              <span className="absolute -right-1.5 -top-1.5 font-mono text-[9px] font-bold leading-none">
+                ±
+              </span>
+            </span>
           </button>
-        ))}
+        ) : null}
       </div>
 
       {tab === 'info' && (
@@ -582,4 +773,38 @@ export function ReplicaSetDetails({ replicaSet, onBack, backLabel = 'ReplicaSets
       )}
     </div>
   )
+
+  if (allowSplit && splitOpen) {
+    return (
+      <div className="flex min-h-0 items-stretch gap-0">
+        <div className="min-w-0 flex-1 overflow-auto pr-4">{pane}</div>
+        <div className="w-px shrink-0 bg-ink-200" />
+        <div className="min-w-0 flex-1 overflow-auto pl-4">
+          {secondReplicaSet ? (
+            <ReplicaSetDetails
+              replicaSet={secondReplicaSet}
+              onBack={() => setSecondReplicaSet(null)}
+              allowSplit={false}
+              showUser={false}
+              onCloseSplit={() => {
+                setSplitOpen(false)
+                setSecondReplicaSet(null)
+              }}
+            />
+          ) : (
+            <SecondReplicaSetPicker
+              excludeUid={replicaSet.metadata.uid}
+              onSelect={setSecondReplicaSet}
+              onClose={() => {
+                setSplitOpen(false)
+                setSecondReplicaSet(null)
+              }}
+            />
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return pane
 }

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronRight, Download } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronRight, Columns2, Download, X } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
-import { fetchPodDetail, fetchPodLogs, fetchPodEvents, savePodYaml } from '@/lib/k8s-client'
+import { fetchPodDetail, fetchPodEvents, fetchPodLogs, listNamespaces, listPods, savePodYaml } from '@/lib/k8s-client'
 import { formatAge, formatCpuMillis, formatMemoryMi, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
 import { GroupedNumber } from '@/components/GroupedNumber'
 import { StatusBadge, podPhaseTone, toneRow } from '@/components/StatusBadge'
 import { SearchSelect } from '@/components/SearchSelect'
+import { SearchInput } from '@/components/SearchInput'
+import { NamespaceFilter } from '@/components/NamespaceFilter'
 import { PanelUser } from '@/components/PanelUser'
 import { PodTerminal } from '@/components/PodTerminal'
 import type { Pod, PodDetail, PodEvent } from '@/types/k8s'
@@ -24,9 +26,130 @@ interface PodDetailsProps {
   pod: Pod
   onBack: () => void
   backLabel?: string
+  allowSplit?: boolean
+  showUser?: boolean
+  onCloseSplit?: () => void
 }
 
-export function PodDetails({ pod, onBack, backLabel = 'Pods' }: PodDetailsProps) {
+function SecondPodPicker({
+  excludeUid,
+  onSelect,
+  onClose,
+}: {
+  excludeUid: string
+  onSelect: (pod: Pod) => void
+  onClose: () => void
+}) {
+  const { connection, namespace: clusterNs } = useCluster()
+  const [items, setItems] = useState<Pod[]>([])
+  const [namespaces, setNamespaces] = useState<string[]>([])
+  const [filterNs, setFilterNs] = useState(clusterNs ?? '')
+  const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    setFilterNs(clusterNs ?? '')
+  }, [clusterNs])
+
+  useEffect(() => {
+    if (!connection) return
+    let cancelled = false
+    setLoading(true)
+    void Promise.all([
+      listPods(connection),
+      listNamespaces(connection).catch(() => [] as { metadata: { name: string } }[]),
+    ])
+      .then(([all, nsItems]) => {
+        if (cancelled) return
+        const pods = all.filter((p) => p.metadata.uid !== excludeUid)
+        setItems(pods)
+        const fromList = nsItems.map((n) => n.metadata.name)
+        const fromPods = pods
+          .map((p) => p.metadata.namespace)
+          .filter((name): name is string => Boolean(name))
+        setNamespaces([...new Set([...fromList, ...fromPods])].sort())
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [connection, excludeUid])
+
+  const rows = useMemo(() => {
+    let list = filterNs ? items.filter((p) => p.metadata.namespace === filterNs) : items
+    const q = query.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (p) =>
+          p.metadata.name.toLowerCase().includes(q) ||
+          (p.metadata.namespace ?? '').toLowerCase().includes(q),
+      )
+    }
+    return list
+  }, [items, filterNs, query])
+
+  return (
+    <div>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl font-bold tracking-tight text-ink-900">Второй под</h1>
+          <p className="mt-1 text-sm text-ink-500">Выбор пода</p>
+        </div>
+        <button
+          type="button"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ink-300 bg-white text-ink-500 transition hover:bg-ink-50 hover:text-ink-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500"
+          title="Закрыть второе окно"
+          aria-label="Закрыть второе окно"
+          onClick={onClose}
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="min-w-[180px] sm:max-w-[240px]">
+          <NamespaceFilter namespaces={namespaces} value={filterNs} onChange={setFilterNs} />
+        </div>
+        <SearchInput value={query} onChange={setQuery} placeholder="Имя…" />
+      </div>
+      {loading ? (
+        <p className="font-mono text-sm text-ink-500">Загрузка подов…</p>
+      ) : rows.length === 0 ? (
+        <p className="font-mono text-sm text-ink-500">Подходящих подов нет</p>
+      ) : (
+        <ul className="divide-y divide-ink-100 overflow-hidden rounded border border-ink-200 bg-white/70">
+          {rows.map((p) => (
+            <li key={p.metadata.uid}>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-leaf-500/[0.06]"
+                onClick={() => onSelect(p)}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-medium text-ink-900">{p.metadata.name}</span>
+                  <span className="font-mono text-[11px] text-ink-500">{p.metadata.namespace}</span>
+                </span>
+                <StatusBadge tone={podPhaseTone(p.status.state, p.status.ready)}>
+                  {p.status.state}
+                </StatusBadge>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+export function PodDetails({
+  pod,
+  onBack,
+  backLabel = 'Pods',
+  allowSplit = true,
+  showUser = true,
+  onCloseSplit,
+}: PodDetailsProps) {
   const { connection } = useCluster()
   const [tab, setTab] = useState<Tab>('info')
   const [detail, setDetail] = useState<PodDetail | null>(null)
@@ -44,6 +167,8 @@ export function PodDetails({ pod, onBack, backLabel = 'Pods' }: PodDetailsProps)
   const [yamlSaving, setYamlSaving] = useState(false)
   const [yamlError, setYamlError] = useState<string | null>(null)
   const [yamlSaved, setYamlSaved] = useState(false)
+  const [splitOpen, setSplitOpen] = useState(false)
+  const [secondPod, setSecondPod] = useState<Pod | null>(null)
   const detailRequestId = useRef(0)
 
   const ns = pod.metadata.namespace ?? ''
@@ -63,6 +188,8 @@ export function PodDetails({ pod, onBack, backLabel = 'Pods' }: PodDetailsProps)
     setYamlSaving(false)
     setYamlError(null)
     setYamlSaved(false)
+    setSplitOpen(false)
+    setSecondPod(null)
   }, [pod.metadata.uid])
 
   const loadDetail = useCallback(
@@ -246,7 +373,7 @@ export function PodDetails({ pod, onBack, backLabel = 'Pods' }: PodDetailsProps)
   const terminalContainers =
     execContainers.length > 0 ? execContainers : pod.spec.containers.map((c) => c.name)
 
-  return (
+  const pane = (
     <div>
       <nav className="mb-3 flex items-center gap-1.5 font-mono text-xs text-ink-500">
         <button
@@ -272,24 +399,66 @@ export function PodDetails({ pod, onBack, backLabel = 'Pods' }: PodDetailsProps)
           </div>
           <p className="mt-1 font-mono text-sm text-ink-500">{pod.metadata.namespace}</p>
         </div>
-        <PanelUser />
+        {showUser ? (
+          <PanelUser />
+        ) : onCloseSplit ? (
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ink-300 bg-white text-ink-500 transition hover:bg-ink-50 hover:text-ink-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500"
+            title="Закрыть второе окно"
+            aria-label="Закрыть второе окно"
+            onClick={onCloseSplit}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
 
-      <div className="mb-6 flex gap-1 border-b border-ink-200">
-        {tabs.map((item) => (
+      <div className="mb-6 flex items-end justify-between gap-2 border-b border-ink-200">
+        <div className="flex gap-1">
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`-mb-px border-b-2 px-3 py-2 text-base font-medium transition ${
+                tab === item.id
+                  ? 'border-leaf-600 text-ink-900'
+                  : 'border-transparent text-ink-500 hover:text-ink-800'
+              }`}
+              onClick={() => setTab(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        {allowSplit ? (
           <button
-            key={item.id}
             type="button"
-            className={`-mb-px border-b-2 px-3 py-2 text-base font-medium transition ${
-              tab === item.id
-                ? 'border-leaf-600 text-ink-900'
-                : 'border-transparent text-ink-500 hover:text-ink-800'
+            className={`mb-1 inline-flex h-8 w-8 items-center justify-center rounded-lg border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500 ${
+              splitOpen
+                ? 'border-leaf-500/50 bg-leaf-400/10 text-leaf-700'
+                : 'border-ink-300 bg-white text-ink-500 hover:bg-ink-50 hover:text-ink-800'
             }`}
-            onClick={() => setTab(item.id)}
+            title={splitOpen ? 'Закрыть второе окно' : 'Открыть второе окно'}
+            aria-label={splitOpen ? 'Закрыть второе окно' : 'Открыть второе окно'}
+            aria-pressed={splitOpen}
+            onClick={() => {
+              if (splitOpen) {
+                setSplitOpen(false)
+                setSecondPod(null)
+              } else {
+                setSplitOpen(true)
+              }
+            }}
           >
-            {item.label}
+            <span className="relative inline-flex">
+              <Columns2 className="h-4 w-4" />
+              <span className="absolute -right-1.5 -top-1.5 font-mono text-[9px] font-bold leading-none">
+                ±
+              </span>
+            </span>
           </button>
-        ))}
+        ) : null}
       </div>
 
       {tab === 'info' && (
@@ -589,4 +758,39 @@ export function PodDetails({ pod, onBack, backLabel = 'Pods' }: PodDetailsProps)
       )}
     </div>
   )
+
+  if (allowSplit && splitOpen) {
+    return (
+      <div className="flex min-h-0 items-stretch gap-0">
+        <div className="min-w-0 flex-1 overflow-auto pr-4">{pane}</div>
+        <div className="w-px shrink-0 bg-ink-200" />
+        <div className="min-w-0 flex-1 overflow-auto pl-4">
+          {secondPod ? (
+            <PodDetails
+              pod={secondPod}
+              onBack={() => setSecondPod(null)}
+              backLabel="Pods"
+              allowSplit={false}
+              showUser={false}
+              onCloseSplit={() => {
+                setSplitOpen(false)
+                setSecondPod(null)
+              }}
+            />
+          ) : (
+            <SecondPodPicker
+              excludeUid={pod.metadata.uid}
+              onSelect={setSecondPod}
+              onClose={() => {
+                setSplitOpen(false)
+                setSecondPod(null)
+              }}
+            />
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return pane
 }

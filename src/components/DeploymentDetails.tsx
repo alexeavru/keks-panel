@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronRight, Columns2, X } from 'lucide-react'
 import { useCluster } from '@/context/ClusterContext'
 import {
   fetchDeploymentDetail,
   fetchDeploymentEvents,
   listDeploymentPods,
   listDeploymentReplicaSets,
+  listDeployments,
+  listNamespaces,
   saveDeploymentYaml,
 } from '@/lib/k8s-client'
 import { formatAge, formatCreatedAt, formatCpuMillis, formatMemoryMi, parseCpuToMillis, parseMemoryToMi } from '@/lib/format'
 import { GroupedNumber } from '@/components/GroupedNumber'
 import { StatusBadge, podPhaseTone } from '@/components/StatusBadge'
+import { SearchInput } from '@/components/SearchInput'
+import { NamespaceFilter } from '@/components/NamespaceFilter'
 import { PanelUser } from '@/components/PanelUser'
 import { PodDetails } from '@/components/PodDetails'
 import { ReplicaSetDetails } from '@/components/ReplicaSetDetails'
@@ -30,9 +34,135 @@ const tabs: { id: Tab; label: string }[] = [
 interface DeploymentDetailsProps {
   deployment: Deployment
   onBack: () => void
+  allowSplit?: boolean
+  showUser?: boolean
+  onCloseSplit?: () => void
 }
 
-export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps) {
+function SecondDeploymentPicker({
+  excludeUid,
+  onSelect,
+  onClose,
+}: {
+  excludeUid: string
+  onSelect: (deployment: Deployment) => void
+  onClose: () => void
+}) {
+  const { connection, namespace: clusterNs } = useCluster()
+  const [items, setItems] = useState<Deployment[]>([])
+  const [namespaces, setNamespaces] = useState<string[]>([])
+  const [filterNs, setFilterNs] = useState(clusterNs ?? '')
+  const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    setFilterNs(clusterNs ?? '')
+  }, [clusterNs])
+
+  useEffect(() => {
+    if (!connection) return
+    let cancelled = false
+    setLoading(true)
+    void Promise.all([
+      listDeployments(connection),
+      listNamespaces(connection).catch(() => [] as { metadata: { name: string } }[]),
+    ])
+      .then(([all, nsItems]) => {
+        if (cancelled) return
+        const deps = all.filter((d) => d.metadata.uid !== excludeUid)
+        setItems(deps)
+        const fromList = nsItems.map((n) => n.metadata.name)
+        const fromDeps = deps
+          .map((d) => d.metadata.namespace)
+          .filter((name): name is string => Boolean(name))
+        setNamespaces([...new Set([...fromList, ...fromDeps])].sort())
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [connection, excludeUid])
+
+  const rows = useMemo(() => {
+    let list = filterNs ? items.filter((d) => d.metadata.namespace === filterNs) : items
+    const q = query.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (d) =>
+          d.metadata.name.toLowerCase().includes(q) ||
+          (d.metadata.namespace ?? '').toLowerCase().includes(q),
+      )
+    }
+    return list
+  }, [items, filterNs, query])
+
+  return (
+    <div>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl font-bold tracking-tight text-ink-900">Второй deployment</h1>
+          <p className="mt-1 text-sm text-ink-500">Выбор deployment</p>
+        </div>
+        <button
+          type="button"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ink-300 bg-white text-ink-500 transition hover:bg-ink-50 hover:text-ink-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500"
+          title="Закрыть второе окно"
+          aria-label="Закрыть второе окно"
+          onClick={onClose}
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="min-w-[180px] sm:max-w-[240px]">
+          <NamespaceFilter namespaces={namespaces} value={filterNs} onChange={setFilterNs} />
+        </div>
+        <SearchInput value={query} onChange={setQuery} placeholder="Имя…" />
+      </div>
+      {loading ? (
+        <p className="font-mono text-sm text-ink-500">Загрузка deployments…</p>
+      ) : rows.length === 0 ? (
+        <p className="font-mono text-sm text-ink-500">Подходящих deployment нет</p>
+      ) : (
+        <ul className="divide-y divide-ink-100 overflow-hidden rounded border border-ink-200 bg-white/70">
+          {rows.map((d) => {
+            const ok = d.status.readyReplicas >= d.spec.replicas
+            return (
+              <li key={d.metadata.uid}>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-leaf-500/[0.06]"
+                  onClick={() => onSelect(d)}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-ink-900">{d.metadata.name}</span>
+                    <span className="font-mono text-[11px] text-ink-500">{d.metadata.namespace}</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className="font-mono text-xs text-ink-600">
+                      {d.status.readyReplicas}/{d.spec.replicas}
+                    </span>
+                    <StatusBadge tone={ok ? 'ok' : 'warn'}>{ok ? 'Ready' : 'Progressing'}</StatusBadge>
+                  </span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+export function DeploymentDetails({
+  deployment,
+  onBack,
+  allowSplit = true,
+  showUser = true,
+  onCloseSplit,
+}: DeploymentDetailsProps) {
   const { connection } = useCluster()
   const [tab, setTab] = useState<Tab>('info')
   const [detail, setDetail] = useState<DeploymentDetail | null>(null)
@@ -54,6 +184,8 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
   const [yamlSaving, setYamlSaving] = useState(false)
   const [yamlError, setYamlError] = useState<string | null>(null)
   const [yamlSaved, setYamlSaved] = useState(false)
+  const [splitOpen, setSplitOpen] = useState(false)
+  const [secondDeployment, setSecondDeployment] = useState<Deployment | null>(null)
   const detailRequestId = useRef(0)
 
   const ns = deployment.metadata.namespace ?? ''
@@ -80,6 +212,8 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
     setYamlSaving(false)
     setYamlError(null)
     setYamlSaved(false)
+    setSplitOpen(false)
+    setSecondDeployment(null)
   }, [deployment.metadata.uid])
 
   const loadDetail = useCallback(
@@ -429,6 +563,9 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
           setSelectedReplicaSet(null)
           setTab('replicasets')
         }}
+        allowSplit={allowSplit}
+        showUser={showUser}
+        onCloseSplit={onCloseSplit}
       />
     )
   }
@@ -442,11 +579,14 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
           setSelectedPod(null)
           setTab('pods')
         }}
+        allowSplit={allowSplit}
+        showUser={showUser}
+        onCloseSplit={onCloseSplit}
       />
     )
   }
 
-  return (
+  const pane = (
     <div>
       <nav className="mb-3 flex items-center gap-1.5 font-mono text-xs text-ink-500">
         <button
@@ -470,24 +610,66 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
           </div>
           <p className="mt-1 font-mono text-sm text-ink-500">{deployment.metadata.namespace}</p>
         </div>
-        <PanelUser />
+        {showUser ? (
+          <PanelUser />
+        ) : onCloseSplit ? (
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ink-300 bg-white text-ink-500 transition hover:bg-ink-50 hover:text-ink-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500"
+            title="Закрыть второе окно"
+            aria-label="Закрыть второе окно"
+            onClick={onCloseSplit}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
 
-      <div className="mb-6 flex gap-1 border-b border-ink-200">
-        {tabs.map((item) => (
+      <div className="mb-6 flex items-end justify-between gap-2 border-b border-ink-200">
+        <div className="flex gap-1">
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`-mb-px border-b-2 px-3 py-2 text-base font-medium transition ${
+                tab === item.id
+                  ? 'border-leaf-600 text-ink-900'
+                  : 'border-transparent text-ink-500 hover:text-ink-800'
+              }`}
+              onClick={() => setTab(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        {allowSplit ? (
           <button
-            key={item.id}
             type="button"
-            className={`-mb-px border-b-2 px-3 py-2 text-base font-medium transition ${
-              tab === item.id
-                ? 'border-leaf-600 text-ink-900'
-                : 'border-transparent text-ink-500 hover:text-ink-800'
+            className={`mb-1 inline-flex h-8 w-8 items-center justify-center rounded-lg border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-leaf-500 ${
+              splitOpen
+                ? 'border-leaf-500/50 bg-leaf-400/10 text-leaf-700'
+                : 'border-ink-300 bg-white text-ink-500 hover:bg-ink-50 hover:text-ink-800'
             }`}
-            onClick={() => setTab(item.id)}
+            title={splitOpen ? 'Закрыть второе окно' : 'Открыть второе окно'}
+            aria-label={splitOpen ? 'Закрыть второе окно' : 'Открыть второе окно'}
+            aria-pressed={splitOpen}
+            onClick={() => {
+              if (splitOpen) {
+                setSplitOpen(false)
+                setSecondDeployment(null)
+              } else {
+                setSplitOpen(true)
+              }
+            }}
           >
-            {item.label}
+            <span className="relative inline-flex">
+              <Columns2 className="h-4 w-4" />
+              <span className="absolute -right-1.5 -top-1.5 font-mono text-[9px] font-bold leading-none">
+                ±
+              </span>
+            </span>
           </button>
-        ))}
+        ) : null}
       </div>
 
       {tab === 'info' && (
@@ -722,4 +904,38 @@ export function DeploymentDetails({ deployment, onBack }: DeploymentDetailsProps
       )}
     </div>
   )
+
+  if (allowSplit && splitOpen) {
+    return (
+      <div className="flex min-h-0 items-stretch gap-0">
+        <div className="min-w-0 flex-1 overflow-auto pr-4">{pane}</div>
+        <div className="w-px shrink-0 bg-ink-200" />
+        <div className="min-w-0 flex-1 overflow-auto pl-4">
+          {secondDeployment ? (
+            <DeploymentDetails
+              deployment={secondDeployment}
+              onBack={() => setSecondDeployment(null)}
+              allowSplit={false}
+              showUser={false}
+              onCloseSplit={() => {
+                setSplitOpen(false)
+                setSecondDeployment(null)
+              }}
+            />
+          ) : (
+            <SecondDeploymentPicker
+              excludeUid={deployment.metadata.uid}
+              onSelect={setSecondDeployment}
+              onClose={() => {
+                setSplitOpen(false)
+                setSecondDeployment(null)
+              }}
+            />
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return pane
 }
